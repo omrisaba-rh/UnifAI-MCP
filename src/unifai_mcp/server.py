@@ -11,8 +11,10 @@ Auth:      Local AS with Identity Service login proxy + in-memory DCR
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -28,6 +30,26 @@ from unifai_mcp.config import Settings
 from unifai_mcp.unifai_client import UnifAIClient
 
 logger = logging.getLogger(__name__)
+
+_SENSITIVE_PARAM = re.compile(r"(user=)[^\s&]+")
+
+
+class _RedactFilter(logging.Filter):
+    """Strip the base64 'user=' query param from uvicorn access logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if hasattr(record, "msg") and isinstance(record.msg, str):
+            record.msg = _SENSITIVE_PARAM.sub(r"\1<redacted>", record.msg)
+        if hasattr(record, "args") and record.args:
+            record.args = tuple(
+                _SENSITIVE_PARAM.sub(r"\1<redacted>", str(a))
+                if isinstance(a, str) else a
+                for a in record.args
+            )
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactFilter())
 
 settings = Settings()
 
@@ -107,6 +129,7 @@ async def identity_callback(request: Request) -> Response:
 
     try:
         redirect_url = await auth_provider.handle_identity_callback(user_b64, state_key)
+        logger.info("Identity callback completed for state=%s…", state_key[:8])
         return RedirectResponse(url=redirect_url, status_code=302)
     except ValueError as exc:
         logger.exception("Identity callback failed")
@@ -187,10 +210,34 @@ async def authenticate(ctx: Context) -> str:
                     key=lambda s: s.get("started_at") or "",
                     reverse=True,
                 )
-                recent = sessions[:5]
+                recent = sessions[:3]
                 parts.append("")
                 parts.append(f"Recent sessions ({len(recent)} of {len(sessions)}):")
-                for s in recent:
+
+                async def _short_summary(sid: str) -> str | None:
+                    try:
+                        chat = await unifai.get_session_chat(sid)
+                        text = (chat.get("output") or "").strip()
+                        if not text:
+                            msgs = chat.get("messages", [])
+                            if msgs:
+                                text = msgs[-1].get("content", "").strip()
+                        if text:
+                            sentences = text.split(". ", 2)[:2]
+                            return ". ".join(sentences).rstrip(".") + "."
+                    except Exception:
+                        return None
+                    return None
+
+                sids = [
+                    s.get("session_id") or s.get("sessionId") or "?"
+                    for s in recent
+                ]
+                summaries = await asyncio.gather(
+                    *[_short_summary(sid) for sid in sids]
+                )
+
+                for s, summary in zip(recent, summaries):
                     metadata = s.get("metadata", {}) or {}
                     sid = s.get("session_id") or s.get("sessionId") or "?"
                     title = metadata.get("title") or s.get("title") or "Untitled"
@@ -205,6 +252,8 @@ async def authenticate(ctx: Context) -> str:
                     if bp_id:
                         line += f"  [blueprint: {bp_id}]"
                     parts.append(line)
+                    if summary:
+                        parts.append(f"    Summary: {summary}")
                 parts.append("")
                 parts.append(
                     "Ask the user if they want to continue working on any of "
@@ -314,6 +363,46 @@ async def run_workflow(
     except Exception as exc:
         logger.exception("Workflow execution failed for blueprint=%s", blueprint_id)
         return f"Workflow execution failed: {exc}"
+
+
+@mcp.tool()
+async def get_session_chat(
+    session_id: str,
+    ctx: Context,
+) -> str:
+    """Retrieve the chat history and output of a previous UnifAI workflow session.
+
+    Args:
+        session_id: The session ID to retrieve (from the authenticate tool's
+                    recent sessions list, or from a previous run_workflow result).
+    """
+    session_cookie, _username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        chat = await unifai.get_session_chat(session_id)
+    except Exception as exc:
+        logger.exception("Failed to fetch session chat for %s", session_id)
+        return f"Failed to fetch session: {exc}"
+
+    output = chat.get("output", "")
+    if output:
+        return (
+            f"Session: {session_id}\n\n"
+            f"Result:\n{output}"
+        )
+
+    messages = chat.get("messages", [])
+    if messages:
+        lines = [f"Session: {session_id}\n"]
+        for m in messages:
+            role = m.get("role", "unknown")
+            content = m.get("content", "")
+            lines.append(f"[{role}] {content}")
+        return "\n".join(lines)
+
+    return f"Session {session_id} has no output or messages yet."
 
 
 async def _resolve_blueprint(

@@ -127,7 +127,7 @@ class IdentityServiceProvider(
         padded = user_b64 + "=" * (-len(user_b64) % 4)
         user_data = json.loads(base64.urlsafe_b64decode(padded).decode())
 
-        logger.info(
+        logger.debug(
             "Identity callback user_data keys: %s", list(user_data.keys())
         )
 
@@ -182,9 +182,8 @@ class IdentityServiceProvider(
         refresh_token_str = secrets.token_urlsafe(48)
         now = int(time.time())
 
-        logger.info(
-            "exchange_authorization_code: user_data keys=%s, session_cookie present=%s",
-            list(user_data.keys()),
+        logger.debug(
+            "exchange_authorization_code: session_cookie present=%s",
             bool(user_data.get("session_cookie") or user_data.get("sessionCookie")),
         )
 
