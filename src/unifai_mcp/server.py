@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 
 _SENSITIVE_PARAM = re.compile(r"(user=)[^\s&]+")
 
+# Curated routing hints for available workflows.
+# The LLM uses these to silently pick the best workflow for a user request.
+# Falls back to spec_dict["description"] for unlisted workflows.
+WORKFLOW_HINTS: dict[str, str] = {
+    "AskRH": "Red Hat product knowledge — use for RHEL, OpenShift, Ansible, security, lifecycle questions",
+    "Web Search": "Internet search — use for current events, public docs, non-Red Hat topics",
+    "Deep Agent Jira": "Jira operations — use when user wants to create, search, or update issues",
+    "Google flow": "Google services — use for email, calendar, or Drive requests",
+    "Web Fetch flow": "Fetch and analyze content from a specific URL",
+    "Full WF- OCP, RHEL and Tools": "Comprehensive multi-source Red Hat support — use for complex questions spanning multiple products",
+    "OCP 4.18 & OCP 4.20": "OpenShift 4.18/4.20 version-specific troubleshooting and guidance",
+}
+
 
 class _RedactFilter(logging.Filter):
     """Strip the base64 'user=' query param from uvicorn access logs."""
@@ -87,8 +100,11 @@ mcp = FastMCP(
         "by blueprint name or ID.\n\n"
         "IMPORTANT: Always call the 'authenticate' tool FIRST at the start of "
         "every conversation, even before the user asks for anything. The tool "
-        "returns your recent UnifAI sessions — present them to the user and ask "
-        "if they'd like to continue working on any of them, or start something new."
+        "returns your recent UnifAI sessions and available workflows.\n\n"
+        "Present only the recent sessions to the user and ask if they'd like to "
+        "continue or start something new. Do NOT list the available workflows to "
+        "the user — use them silently when deciding which workflow to invoke via "
+        "run_workflow. Pick the most specific workflow matching the user's intent."
     ),
     auth_server_provider=auth_provider,
     auth=auth_settings,
@@ -177,8 +193,9 @@ async def authenticate(ctx: Context) -> str:
     """Check authentication status, return user profile and recent sessions.
 
     Call this tool at the start of every conversation. It returns the user's
-    identity **and** their most recent UnifAI workflow sessions so you can
-    offer to continue where they left off.
+    identity, their most recent UnifAI workflow sessions so you can offer to
+    continue where they left off, and the available workflows for internal
+    routing context.
     """
     access = get_access_token()
     if access is None or not access.subject:
@@ -201,10 +218,22 @@ async def authenticate(ctx: Context) -> str:
     ]
 
     if session_cookie:
-        try:
-            unifai = _get_unifai(ctx)
-            unifai.set_session_cookie(session_cookie)
-            sessions = await unifai.list_user_sessions()
+        unifai = _get_unifai(ctx)
+        unifai.set_session_cookie(session_cookie)
+
+        # Fetch sessions and blueprints concurrently
+        sessions_result, blueprints_result = await asyncio.gather(
+            unifai.list_user_sessions(),
+            unifai.list_blueprints(username),
+            return_exceptions=True,
+        )
+
+        # ── Recent sessions (displayed to user) ──
+        if isinstance(sessions_result, Exception):
+            logger.debug("Could not fetch recent sessions: %s", sessions_result)
+            parts.append("\n(Could not fetch recent sessions.)")
+        else:
+            sessions = sessions_result
             if sessions:
                 sessions.sort(
                     key=lambda s: s.get("started_at") or "",
@@ -261,9 +290,31 @@ async def authenticate(ctx: Context) -> str:
                 )
             else:
                 parts.append("\nNo recent sessions found.")
-        except Exception as exc:
-            logger.debug("Could not fetch recent sessions: %s", exc)
-            parts.append("\n(Could not fetch recent sessions.)")
+
+        # ── Available workflows (internal context — do NOT display to user) ──
+        if isinstance(blueprints_result, Exception):
+            logger.debug("Could not fetch workflows: %s", blueprints_result)
+        else:
+            blueprints = blueprints_result
+            if blueprints:
+                parts.append("")
+                parts.append(
+                    "[INTERNAL — do not display the following to the user. "
+                    "Use silently to route user requests to the appropriate workflow "
+                    "via the run_workflow tool.]"
+                )
+                parts.append(f"Available workflows ({len(blueprints)}):")
+                for bp in blueprints:
+                    spec = bp.get("spec_dict", {})
+                    bp_name = spec.get("name", "Unnamed")
+                    hint = WORKFLOW_HINTS.get(bp_name)
+                    if not hint:
+                        desc = spec.get("description", "")
+                        hint = desc.split(".")[0][:80] if desc else ""
+                    line = f"  • {bp_name}"
+                    if hint:
+                        line += f" — {hint}"
+                    parts.append(line)
 
     return "\n".join(parts)
 
