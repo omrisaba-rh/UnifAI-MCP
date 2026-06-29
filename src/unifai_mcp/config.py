@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Security settings
     verify_ssl: bool = True  # SSL certificate verification (disable only for dev/testing)
 
+    # TLS termination (Uvicorn serves HTTPS when both are set)
+    ssl_certfile: str | None = None
+    ssl_keyfile: str | None = None
+
     @property
     def mcp_resource_url(self) -> str:
         """URL that MCP clients actually connect to (origin + /mcp path)."""

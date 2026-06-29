@@ -530,6 +530,30 @@ async def _resolve_blueprint(
 
 
 def main() -> None:
+    if settings.ssl_certfile and settings.ssl_keyfile:
+        import uvicorn
+
+        _orig_run = mcp.run_streamable_http_async
+
+        async def _run_https() -> None:
+            starlette_app = mcp.streamable_http_app()
+            config = uvicorn.Config(
+                starlette_app,
+                host=mcp.settings.host,
+                port=mcp.settings.port,
+                log_level=mcp.settings.log_level.lower(),
+                ssl_certfile=settings.ssl_certfile,
+                ssl_keyfile=settings.ssl_keyfile,
+            )
+            server = uvicorn.Server(config)
+            await server.serve()
+
+        mcp.run_streamable_http_async = _run_https
+        logger.info(
+            "TLS enabled — cert=%s  key=%s",
+            settings.ssl_certfile, settings.ssl_keyfile,
+        )
+
     mcp.run(transport="streamable-http")
 
 
