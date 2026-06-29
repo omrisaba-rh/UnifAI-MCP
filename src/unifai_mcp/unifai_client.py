@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -17,7 +18,13 @@ class UnifAIClient:
     matching the pattern used by the UnifAI CLI.
     """
 
-    def __init__(self, base_url: str, timeout: float = 120, verify_ssl: bool = True):
+    def __init__(
+        self,
+        base_url: str,
+        timeout: float = 120,
+        verify_ssl: bool = True,
+        cache_ttl: int = 300,  # 5 minutes default cache TTL
+    ):
         self._base_url = base_url.rstrip("/")
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
@@ -26,6 +33,9 @@ class UnifAIClient:
             verify=verify_ssl,
             headers={"Accept": "application/json"},
         )
+        # Cache for blueprints: {cache_key: (data, timestamp)}
+        self._blueprint_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
+        self._cache_ttl = cache_ttl
 
     def set_session_cookie(self, session_cookie: str) -> None:
         """Install the pre-signed session cookie for API authentication."""
@@ -36,29 +46,84 @@ class UnifAIClient:
     async def list_blueprints(
         self,
         user_id: str,
+        use_cache: bool = True,
     ) -> list[dict[str, Any]]:
+        """List available blueprints for a user.
+
+        Args:
+            user_id: The user ID to fetch blueprints for
+            use_cache: Whether to use cached results (default: True)
+
+        Returns:
+            List of blueprint dictionaries
+        """
+        cache_key = f"bp_{user_id}"
+
+        # Check cache if enabled
+        if use_cache and cache_key in self._blueprint_cache:
+            cached_data, timestamp = self._blueprint_cache[cache_key]
+            age = time.time() - timestamp
+            if age < self._cache_ttl:
+                logger.debug(
+                    "Using cached blueprints for user=%s (age=%.1fs)",
+                    user_id, age
+                )
+                return cached_data
+            else:
+                logger.debug(
+                    "Cache expired for user=%s (age=%.1fs > ttl=%ds)",
+                    user_id, age, self._cache_ttl
+                )
+
+        # Fetch from API
         resp = await self._http.get(
             "/blueprints/available.blueprints.resolved.get",
             params={"userId": user_id, "identityType": "user"},
         )
         resp.raise_for_status()
         data = self._parse_json(resp)
+
         if isinstance(data, dict) and "items" in data:
-            return data["items"]
-        return data if isinstance(data, list) else []
+            result = data["items"]
+        else:
+            result = data if isinstance(data, list) else []
+
+        # Update cache
+        self._blueprint_cache[cache_key] = (result, time.time())
+        logger.debug(
+            "Cached %d blueprints for user=%s",
+            len(result), user_id
+        )
+
+        return result
 
     async def find_blueprint_by_name(
         self,
         name: str,
         user_id: str,
+        use_cache: bool = True,
     ) -> str | None:
-        """Return the blueprint ID whose name matches *name* (case-insensitive)."""
-        blueprints = await self.list_blueprints(user_id)
+        """Return the blueprint ID whose name matches *name* (case-insensitive).
+
+        Args:
+            name: Blueprint name to search for
+            user_id: User ID to search blueprints for
+            use_cache: Whether to use cached blueprint list (default: True)
+
+        Returns:
+            Blueprint ID if found, None otherwise
+        """
+        blueprints = await self.list_blueprints(user_id, use_cache=use_cache)
         for bp in blueprints:
             bp_name = bp.get("spec_dict", {}).get("name", "")
             if bp_name.lower() == name.lower():
                 return bp.get("blueprint_id", "")
         return None
+
+    def clear_cache(self) -> None:
+        """Clear all cached data."""
+        self._blueprint_cache.clear()
+        logger.info("Cleared all caches")
 
     # ── Sessions / Workflow execution ───────────────────────────
 

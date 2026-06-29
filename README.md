@@ -9,6 +9,10 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 - **Dynamic Client Registration** — MCP clients self-register locally (no Keycloak redirect-URI allowlist needed)
 - **Automatic workflow discovery** — on authentication, available workflows are loaded into the LLM context for intelligent routing
 - **Concurrent data loading** — sessions and workflows are fetched in parallel for fast startup
+- **Smart caching** — blueprint data cached for 5 minutes to reduce API calls and improve performance
+- **Timeout protection** — workflows automatically timeout after 5 minutes to prevent indefinite waiting
+- **Progress reporting** — real-time updates with elapsed time during workflow execution
+- **Secure by default** — SSL verification enabled by default (configurable for dev environments)
 
 ## Tools
 
@@ -128,6 +132,7 @@ All settings are read from environment variables or a `.env` file:
 | `SSO_URL` | *(staging URL)* | UnifAI Identity Service URL (handles Keycloak SSO) |
 | `UNIFAI_BASE_URL` | *(staging URL)* | UnifAI deployment URL |
 | `UNIFAI_API_PREFIX` | `/api2` | API path prefix on the UnifAI deployment |
+| `VERIFY_SSL` | `true` | Enable SSL certificate verification (set to `false` only for dev/testing with self-signed certs) |
 
 ## Project Structure
 

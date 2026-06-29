@@ -83,7 +83,12 @@ auth_settings = create_auth_settings(
 
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncIterator[dict]:
-    client = UnifAIClient(settings.unifai_api_url, verify_ssl=False)
+    client = UnifAIClient(settings.unifai_api_url, verify_ssl=settings.verify_ssl)
+    if not settings.verify_ssl:
+        logger.warning(
+            "SSL verification is DISABLED. This should only be used in "
+            "development/testing environments. Enable VERIFY_SSL=true in production."
+        )
     try:
         yield {"unifai": client}
     finally:
@@ -377,20 +382,69 @@ async def run_workflow(
             {"user_prompt": prompt},
         )
 
+        # Configurable timeout and polling
+        MAX_POLL_DURATION = 300  # 5 minutes
+        POLL_INTERVAL = 3  # seconds
+        MAX_RETRIES = MAX_POLL_DURATION // POLL_INTERVAL
+
         await ctx.info("Waiting for workflow to complete...")
         import asyncio
+        import time
+
+        start_time = time.time()
         seen_active = False
-        for _ in range(60):
-            await asyncio.sleep(3)
-            stream = await unifai.get_stream_status(session_id)
+
+        for i in range(MAX_RETRIES):
+            elapsed = int(time.time() - start_time)
+
+            # Check for timeout
+            if elapsed > MAX_POLL_DURATION:
+                logger.warning(
+                    "Workflow timeout after %ds (session=%s, blueprint=%s)",
+                    MAX_POLL_DURATION, session_id, blueprint_id
+                )
+                return (
+                    f"Workflow execution timeout after {MAX_POLL_DURATION}s.\n"
+                    f"Session : {session_id}\n"
+                    f"Blueprint: {blueprint_id}\n\n"
+                    f"The workflow may still be running. Check the session status manually "
+                    f"using get_session_chat with session_id: {session_id}"
+                )
+
+            try:
+                stream = await unifai.get_stream_status(session_id)
+            except Exception as stream_exc:
+                logger.warning(
+                    "Failed to get stream status (attempt %d/%d): %s",
+                    i + 1, MAX_RETRIES, stream_exc
+                )
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+
             is_active = stream.get("is_active", False)
+
             if is_active:
                 seen_active = True
-                await ctx.info("Workflow running...")
+                # Enhanced progress reporting
+                if i % 10 == 0:  # Report every 30 seconds
+                    await ctx.info(f"Workflow running... ({elapsed}s elapsed)")
             elif seen_active or stream.get("not_found"):
+                # Workflow completed or stopped
                 break
 
-        chat = await unifai.get_session_chat(session_id)
+            await asyncio.sleep(POLL_INTERVAL)
+
+        # Retrieve final results
+        try:
+            chat = await unifai.get_session_chat(session_id)
+        except Exception as chat_exc:
+            logger.exception("Failed to retrieve session chat for %s", session_id)
+            return (
+                f"Workflow may have completed, but failed to retrieve results: {chat_exc}\n"
+                f"Session : {session_id}\n"
+                f"Blueprint: {blueprint_id}"
+            )
+
         output = chat.get("output", "")
         messages = chat.get("messages", [])
 
