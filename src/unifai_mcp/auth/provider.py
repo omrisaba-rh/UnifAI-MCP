@@ -64,6 +64,7 @@ class IdentityServiceProvider(
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
         self._user_data: dict[str, dict[str, Any]] = {}
+        self._token_sessions: dict[str, str] = {}
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self._clients.get(client_id)
@@ -204,9 +205,11 @@ class IdentityServiceProvider(
                 "preferred_username": user_data.get("username", ""),
                 "email": user_data.get("email", ""),
                 "name": user_data.get("name", ""),
-                "session_cookie": session_cookie,
             },
         )
+
+        if session_cookie:
+            self._token_sessions[access_token_str] = session_cookie
 
         self._refresh_tokens[refresh_token_str] = RefreshToken(
             token=refresh_token_str,
@@ -280,9 +283,11 @@ class IdentityServiceProvider(
                 "preferred_username": user_data.get("username", ""),
                 "email": user_data.get("email", ""),
                 "name": user_data.get("name", ""),
-                "session_cookie": session_cookie,
             },
         )
+
+        if session_cookie:
+            self._token_sessions[new_access] = session_cookie
 
         self._refresh_tokens[new_refresh] = RefreshToken(
             token=new_refresh,
@@ -308,6 +313,11 @@ class IdentityServiceProvider(
     ) -> None:
         if isinstance(token, AccessToken):
             self._access_tokens.pop(token.token, None)
+            self._token_sessions.pop(token.token, None)
         elif isinstance(token, RefreshToken):
             self._refresh_tokens.pop(token.token, None)
             self._user_data.pop(token.token, None)
+
+    def get_session_cookie(self, token: str) -> str | None:
+        """Look up the backend session cookie for a given access token."""
+        return self._token_sessions.get(token)

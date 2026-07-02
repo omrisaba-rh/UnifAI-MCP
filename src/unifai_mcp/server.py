@@ -155,7 +155,7 @@ async def identity_callback(request: Request) -> Response:
     except ValueError as exc:
         logger.exception("Identity callback failed")
         return Response(
-            content=f"Callback error: {exc}",
+            content="Authentication callback failed. Please try again.",
             status_code=400,
             media_type="text/plain",
         )
@@ -182,7 +182,7 @@ def _require_auth() -> tuple[str, str]:
         raise PermissionError("Not authenticated — complete the OAuth login flow first.")
     claims = access.claims or {}
     username = claims.get("preferred_username", access.subject)
-    session_cookie = claims.get("session_cookie", "")
+    session_cookie = auth_provider.get_session_cookie(access.token) or ""
     if not session_cookie:
         raise PermissionError(
             "Session cookie missing. Please re-authenticate."
@@ -335,7 +335,7 @@ async def list_workflows(ctx: Context) -> str:
         blueprints = await unifai.list_blueprints(username)
     except Exception as exc:
         logger.exception("Failed to list blueprints")
-        return f"Failed to list workflows: {exc}"
+        return "Failed to list workflows. Please try again later."
 
     if not blueprints:
         return "No workflows available."
@@ -467,7 +467,107 @@ async def run_workflow(
         raise
     except Exception as exc:
         logger.exception("Workflow execution failed for blueprint=%s", blueprint_id)
-        return f"Workflow execution failed: {exc}"
+        return (
+            f"Workflow execution failed. Please try again.\n"
+            f"Blueprint: {blueprint_id}"
+        )
+
+
+@mcp.tool()
+async def list_sessions(ctx: Context, limit: int = 20) -> str:
+    """List the current user's recent UnifAI workflow sessions.
+
+    Returns session IDs, titles, timestamps, and blueprint info so the user
+    can browse history or resume a previous session via get_session_chat.
+
+    Args:
+        limit: Maximum number of sessions to return (default 20, most recent first).
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        sessions = await unifai.list_user_sessions()
+    except Exception as exc:
+        logger.exception("Failed to list sessions")
+        return "Failed to list sessions. Please try again later."
+
+    if not sessions:
+        return "No sessions found."
+
+    sessions.sort(key=lambda s: s.get("started_at") or "", reverse=True)
+    sessions = sessions[:limit]
+
+    lines = [f"Sessions ({len(sessions)} shown):\n"]
+    for s in sessions:
+        metadata = s.get("metadata", {}) or {}
+        sid = s.get("session_id") or s.get("sessionId") or "?"
+        title = metadata.get("title") or s.get("title") or "Untitled"
+        started = s.get("started_at", "")
+        if started:
+            started = started[:19]
+        bp_id = s.get("blueprint_id", "")
+        status = s.get("status", "")
+
+        line = f"  - {title}"
+        if started:
+            line += f"  ({started})"
+        if status:
+            line += f"  [{status}]"
+        line += f"\n    id: {sid}"
+        if bp_id:
+            line += f"  |  blueprint: {bp_id}"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def list_recent_5_sessions(ctx: Context) -> str:
+    """Fetch the 5 most recent UnifAI workflow sessions.
+
+    A quick-access tool that returns the last 5 sessions with their IDs,
+    titles, and timestamps. Use get_session_chat to retrieve full details.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        sessions = await unifai.list_user_sessions()
+    except Exception:
+        logger.exception("Failed to list recent sessions")
+        return "Failed to list sessions. Please try again later."
+
+    if not sessions:
+        return "No sessions found."
+
+    sessions.sort(key=lambda s: s.get("started_at") or "", reverse=True)
+    recent = sessions[:5]
+
+    lines = [f"Last {len(recent)} sessions:\n"]
+    for s in recent:
+        metadata = s.get("metadata", {}) or {}
+        sid = s.get("session_id") or s.get("sessionId") or "?"
+        title = metadata.get("title") or s.get("title") or "Untitled"
+        started = s.get("started_at", "")
+        if started:
+            started = started[:19]
+        bp_id = s.get("blueprint_id", "")
+        status = s.get("status", "")
+
+        line = f"  - {title}"
+        if started:
+            line += f"  ({started})"
+        if status:
+            line += f"  [{status}]"
+        line += f"\n    id: {sid}"
+        if bp_id:
+            line += f"  |  blueprint: {bp_id}"
+        lines.append(line)
+
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -489,7 +589,7 @@ async def get_session_chat(
         chat = await unifai.get_session_chat(session_id)
     except Exception as exc:
         logger.exception("Failed to fetch session chat for %s", session_id)
-        return f"Failed to fetch session: {exc}"
+        return f"Failed to fetch session {session_id}. Please try again later."
 
     output = chat.get("output", "")
     if output:
