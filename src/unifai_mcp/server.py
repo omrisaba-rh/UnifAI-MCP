@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.fastmcp import Context, FastMCP
@@ -129,6 +129,15 @@ mcp = FastMCP(
     host=settings.mcp_host,
     port=settings.mcp_port,
 )
+
+
+# ── Health check ─────────────────────────────────────────────────
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> Response:
+    """Liveness / readiness probe for container orchestrators."""
+    return JSONResponse({"status": "ok"})
 
 
 # ── Identity Service callback route ─────────────────────────────

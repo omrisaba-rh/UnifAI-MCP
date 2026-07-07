@@ -1,0 +1,98 @@
+# Values for unifai-mcp on OpenShift
+# Usage: helm upgrade --install unifai-mcp ./helm -f ./helm/values-openshift.yaml -n your-namespace
+
+replicaCount: 1
+
+image:
+  repository: images.paas.redhat.com/unifai/unifai-mcp
+  pullPolicy: Always
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podLabels:
+  paas.redhat.com/appcode: TAG-001
+
+# IMPORTANT: OpenShift assigns these from the namespace's SCC range
+# Do NOT set fsGroup or runAsUser - let OpenShift assign them
+podSecurityContext: {}
+
+# Container security context - only set what OpenShift allows
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+
+service:
+  type: ClusterIP
+  port: 13456
+  targetPort: 13456
+
+# Environment variables for the application
+env:
+  MCP_PORT: "13456"
+  MCP_HOST: "0.0.0.0"
+  MCP_SERVER_URL: "https://unifai-mcp-tag-ai--runtime-int.apps.stc-ai-e1-pp.imap.p1.openshiftapps.com"
+  VERIFY_SSL: "false"
+  SSO_URL: "https://unifai-identity-tag-ai--pipeline.apps.stc-ai-e1-prod.rtc9.p1.openshiftapps.com/"
+  UNIFAI_BASE_URL: "https://unifai-ui-tag-ai--pipeline.apps.stc-ai-e1-prod.rtc9.p1.openshiftapps.com/"
+  UNIFAI_API_PREFIX: "/api2"
+
+# Health check configuration
+healthCheck:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  timeoutSeconds: 10
+  successThreshold: 1
+  failureThreshold: 3
+
+# OpenShift Route configuration (HTTPS with edge TLS termination)
+# Route host is derived from env.MCP_SERVER_URL
+route:
+  enabled: true
+  annotations: {}
+  termination: edge
+  insecureEdgeTerminationPolicy: Redirect
+
+# Ingress disabled (using OpenShift Route)
+ingress:
+  enabled: false
+
+resources:
+  limits:
+    cpu: "4"
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# Autoscaling
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
