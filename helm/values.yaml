@@ -1,0 +1,92 @@
+# Default values for unifai-mcp
+replicaCount: 1
+
+image:
+  repository: images.paas.redhat.com/unifai/unifai-mcp
+  pullPolicy: Always
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Pod security context
+# Note: Do NOT set fsGroup or runAsUser for OpenShift deployments
+# OpenShift assigns these from the namespace's SCC range
+podSecurityContext: {}
+
+# Container security context
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 13456
+  targetPort: 13456
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: unifai-mcp.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: "1"
+    memory: 1Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# Environment variables for the application
+env:
+  MCP_PORT: "13456"
+  MCP_HOST: "0.0.0.0"
+  VERIFY_SSL: "true"
+
+# Health check configuration
+healthCheck:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  timeoutSeconds: 10
+  successThreshold: 1
+  failureThreshold: 3
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# OpenShift Route configuration (HTTPS)
+route:
+  enabled: false
+  host: ""
+  annotations: {}
+  termination: edge
+  insecureEdgeTerminationPolicy: Redirect
