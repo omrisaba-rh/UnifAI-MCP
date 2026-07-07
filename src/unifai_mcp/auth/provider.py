@@ -47,6 +47,24 @@ logger = logging.getLogger(__name__)
 CODE_TTL = 300
 ACCESS_TOKEN_TTL = 3600
 REFRESH_TOKEN_TTL = 86400
+MAX_CLIENTS = 1000
+MAX_PENDING_AUTH = 1000
+SWEEP_INTERVAL = 300  # 5 minutes
+
+_SENSITIVE_USER_KEYS = frozenset({
+    "session_cookie", "sessionCookie", "cookie", "token",
+    "access_token", "refresh_token", "password", "secret",
+})
+
+
+def _safe_claims(server_url: str, user_data: dict[str, Any]) -> dict[str, Any]:
+    """Build a claims dict that never includes sensitive fields."""
+    return {
+        "iss": server_url,
+        "preferred_username": user_data.get("username", ""),
+        "email": user_data.get("email", ""),
+        "name": user_data.get("name", ""),
+    }
 
 
 class IdentityServiceProvider(
@@ -75,6 +93,11 @@ class IdentityServiceProvider(
                 error="invalid_redirect_uri",
                 error_description="At least one redirect_uri is required",
             )
+        if len(self._clients) >= MAX_CLIENTS:
+            raise RegistrationError(
+                error="temporarily_unavailable",
+                error_description="Too many registered clients. Try again later.",
+            )
         if not client_info.client_id:
             client_info.client_id = f"mcp-{secrets.token_hex(12)}"
             client_info.client_id_issued_at = int(time.time())
@@ -86,6 +109,9 @@ class IdentityServiceProvider(
         client: OAuthClientInformationFull,
         params: AuthorizationParams,
     ) -> str:
+        if len(self._pending_auth) >= MAX_PENDING_AUTH:
+            self.sweep_expired()
+
         our_state = secrets.token_urlsafe(32)
 
         self._pending_auth[our_state] = {
@@ -200,16 +226,12 @@ class IdentityServiceProvider(
             expires_at=now + ACCESS_TOKEN_TTL,
             resource=authorization_code.resource,
             subject=authorization_code.subject,
-            claims={
-                "iss": self._server_url,
-                "preferred_username": user_data.get("username", ""),
-                "email": user_data.get("email", ""),
-                "name": user_data.get("name", ""),
-            },
+            claims=_safe_claims(self._server_url, user_data),
         )
 
         if session_cookie:
             self._token_sessions[access_token_str] = session_cookie
+            self._token_sessions[refresh_token_str] = session_cookie
 
         self._refresh_tokens[refresh_token_str] = RefreshToken(
             token=refresh_token_str,
@@ -219,7 +241,10 @@ class IdentityServiceProvider(
             subject=authorization_code.subject,
         )
 
-        self._user_data[refresh_token_str] = user_data
+        safe_user_data = {
+            k: v for k, v in user_data.items() if k not in _SENSITIVE_USER_KEYS
+        }
+        self._user_data[refresh_token_str] = safe_user_data
 
         return OAuthToken(
             access_token=access_token_str,
@@ -261,16 +286,12 @@ class IdentityServiceProvider(
     ) -> OAuthToken:
         self._refresh_tokens.pop(refresh_token.token, None)
         user_data = self._user_data.pop(refresh_token.token, {})
+        session_cookie = self._token_sessions.pop(refresh_token.token, "")
 
         now = int(time.time())
         new_access = secrets.token_urlsafe(48)
         new_refresh = secrets.token_urlsafe(48)
         effective_scopes = scopes or refresh_token.scopes
-
-        session_cookie = (
-            user_data.get("session_cookie", "")
-            or user_data.get("sessionCookie", "")
-        )
 
         self._access_tokens[new_access] = AccessToken(
             token=new_access,
@@ -278,16 +299,12 @@ class IdentityServiceProvider(
             scopes=effective_scopes,
             expires_at=now + ACCESS_TOKEN_TTL,
             subject=refresh_token.subject,
-            claims={
-                "iss": self._server_url,
-                "preferred_username": user_data.get("username", ""),
-                "email": user_data.get("email", ""),
-                "name": user_data.get("name", ""),
-            },
+            claims=_safe_claims(self._server_url, user_data),
         )
 
         if session_cookie:
             self._token_sessions[new_access] = session_cookie
+            self._token_sessions[new_refresh] = session_cookie
 
         self._refresh_tokens[new_refresh] = RefreshToken(
             token=new_refresh,
@@ -316,7 +333,56 @@ class IdentityServiceProvider(
             self._token_sessions.pop(token.token, None)
         elif isinstance(token, RefreshToken):
             self._refresh_tokens.pop(token.token, None)
+            self._token_sessions.pop(token.token, None)
             self._user_data.pop(token.token, None)
+
+    def sweep_expired(self) -> None:
+        """Remove all expired entries from in-memory auth state."""
+        now = time.time()
+
+        expired_pending = [
+            k for k, v in self._pending_auth.items()
+            if now - v.get("created_at", 0) > CODE_TTL
+        ]
+        for k in expired_pending:
+            self._pending_auth.pop(k, None)
+
+        expired_codes = [
+            k for k, v in self._auth_codes.items()
+            if v.expires_at and now > v.expires_at
+        ]
+        for k in expired_codes:
+            self._auth_codes.pop(k, None)
+            self._user_data.pop(k, None)
+
+        expired_access = [
+            k for k, v in self._access_tokens.items()
+            if v.expires_at and now > v.expires_at
+        ]
+        for k in expired_access:
+            self._access_tokens.pop(k, None)
+            self._token_sessions.pop(k, None)
+
+        expired_refresh = [
+            k for k, v in self._refresh_tokens.items()
+            if v.expires_at and now > v.expires_at
+        ]
+        for k in expired_refresh:
+            self._refresh_tokens.pop(k, None)
+            self._token_sessions.pop(k, None)
+            self._user_data.pop(k, None)
+
+        total = (
+            len(expired_pending) + len(expired_codes)
+            + len(expired_access) + len(expired_refresh)
+        )
+        if total:
+            logger.info(
+                "Swept %d expired entries (pending=%d, codes=%d, "
+                "access=%d, refresh=%d)",
+                total, len(expired_pending), len(expired_codes),
+                len(expired_access), len(expired_refresh),
+            )
 
     def get_session_cookie(self, token: str) -> str | None:
         """Look up the backend session cookie for a given access token."""
