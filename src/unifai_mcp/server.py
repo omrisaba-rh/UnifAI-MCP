@@ -24,7 +24,7 @@ from starlette.responses import RedirectResponse, Response
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.fastmcp import Context, FastMCP
 
-from unifai_mcp.auth.provider import IdentityServiceProvider
+from unifai_mcp.auth.provider import SWEEP_INTERVAL, IdentityServiceProvider
 from unifai_mcp.auth.settings import create_auth_settings
 from unifai_mcp.config import Settings
 from unifai_mcp.unifai_client import UnifAIClient
@@ -81,6 +81,16 @@ auth_settings = create_auth_settings(
 # ── Lifespan (shared UnifAI HTTP client) ────────────────────────
 
 
+async def _auth_sweep_loop() -> None:
+    """Periodically purge expired auth state from memory."""
+    while True:
+        await asyncio.sleep(SWEEP_INTERVAL)
+        try:
+            auth_provider.sweep_expired()
+        except Exception:
+            logger.exception("Auth sweep failed")
+
+
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncIterator[dict]:
     client = UnifAIClient(settings.unifai_api_url, verify_ssl=settings.verify_ssl)
@@ -89,9 +99,11 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[dict]:
             "SSL verification is DISABLED. This should only be used in "
             "development/testing environments. Enable VERIFY_SSL=true in production."
         )
+    sweep_task = asyncio.create_task(_auth_sweep_loop())
     try:
         yield {"unifai": client}
     finally:
+        sweep_task.cancel()
         await client.close()
 
 
@@ -211,7 +223,7 @@ async def authenticate(ctx: Context) -> str:
         )
 
     claims = access.claims or {}
-    session_cookie = claims.get("session_cookie", "")
+    session_cookie = auth_provider.get_session_cookie(access.token) or ""
     username = claims.get("preferred_username", access.subject)
 
     parts = [
@@ -228,7 +240,7 @@ async def authenticate(ctx: Context) -> str:
 
         # Fetch sessions and blueprints concurrently
         sessions_result, blueprints_result = await asyncio.gather(
-            unifai.list_user_sessions(),
+            unifai.list_user_sessions(user_key=username),
             unifai.list_blueprints(username),
             return_exceptions=True,
         )
@@ -488,7 +500,7 @@ async def list_sessions(ctx: Context, limit: int = 20) -> str:
     unifai.set_session_cookie(session_cookie)
 
     try:
-        sessions = await unifai.list_user_sessions()
+        sessions = await unifai.list_user_sessions(user_key=username)
     except Exception as exc:
         logger.exception("Failed to list sessions")
         return "Failed to list sessions. Please try again later."
@@ -535,7 +547,7 @@ async def list_recent_5_sessions(ctx: Context) -> str:
     unifai.set_session_cookie(session_cookie)
 
     try:
-        sessions = await unifai.list_user_sessions()
+        sessions = await unifai.list_user_sessions(user_key=username)
     except Exception:
         logger.exception("Failed to list recent sessions")
         return "Failed to list sessions. Please try again later."
@@ -581,9 +593,16 @@ async def get_session_chat(
         session_id: The session ID to retrieve (from the authenticate tool's
                     recent sessions list, or from a previous run_workflow result).
     """
-    session_cookie, _username = _require_auth()
+    session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
     unifai.set_session_cookie(session_cookie)
+
+    if not await unifai.user_owns_session(session_id, username):
+        logger.warning(
+            "IDOR blocked: user=%s tried to access session=%s",
+            username, session_id,
+        )
+        return f"Session {session_id} not found or access denied."
 
     try:
         chat = await unifai.get_session_chat(session_id)

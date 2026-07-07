@@ -35,6 +35,8 @@ class UnifAIClient:
         )
         # Cache for blueprints: {cache_key: (data, timestamp)}
         self._blueprint_cache: dict[str, tuple[list[dict[str, Any]], float]] = {}
+        # Cache for user session ID sets: {cache_key: (set_of_ids, timestamp)}
+        self._session_cache: dict[str, tuple[set[str], float]] = {}
         self._cache_ttl = cache_ttl
 
     def set_session_cookie(self, session_cookie: str) -> None:
@@ -120,19 +122,59 @@ class UnifAIClient:
                 return bp.get("blueprint_id", "")
         return None
 
+    def _update_session_id_cache(
+        self, user_key: str, sessions: list[dict[str, Any]]
+    ) -> None:
+        """Refresh the session-ownership cache from a session list response."""
+        ids = set()
+        for s in sessions:
+            sid = s.get("session_id") or s.get("sessionId")
+            if sid:
+                ids.add(sid)
+        self._session_cache[user_key] = (ids, time.time())
+
+    async def user_owns_session(
+        self, session_id: str, user_key: str
+    ) -> bool:
+        """Return True if *session_id* belongs to the authenticated user.
+
+        Uses a cached set of session IDs (populated by list_user_sessions)
+        to avoid an API call on every check.  Falls back to a fresh fetch
+        when the cache is cold or expired.
+        """
+        cached = self._session_cache.get(user_key)
+        if cached:
+            ids, ts = cached
+            if time.time() - ts < self._cache_ttl:
+                return session_id in ids
+
+        sessions = await self.list_user_sessions()
+        self._update_session_id_cache(user_key, sessions)
+        ids = self._session_cache[user_key][0]
+        return session_id in ids
+
     def clear_cache(self) -> None:
         """Clear all cached data."""
         self._blueprint_cache.clear()
+        self._session_cache.clear()
         logger.info("Cleared all caches")
 
     # ── Sessions / Workflow execution ───────────────────────────
 
-    async def list_user_sessions(self) -> list[dict[str, Any]]:
-        """List the current user's workflow sessions (most recent first)."""
+    async def list_user_sessions(
+        self, user_key: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List the current user's workflow sessions (most recent first).
+
+        If *user_key* is provided, the session-ownership cache is updated.
+        """
         resp = await self._http.get("/sessions/session.user.list")
         resp.raise_for_status()
         data = self._parse_json(resp)
-        return data if isinstance(data, list) else []
+        sessions = data if isinstance(data, list) else []
+        if user_key:
+            self._update_session_id_cache(user_key, sessions)
+        return sessions
 
     async def create_session(
         self,
