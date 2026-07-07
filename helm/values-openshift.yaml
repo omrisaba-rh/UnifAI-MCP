@@ -44,9 +44,9 @@ env:
   MCP_PORT: "13456"
   MCP_HOST: "0.0.0.0"
   MCP_SERVER_URL: "https://unifai-mcp-tag-ai--runtime-int.apps.stc-ai-e1-pp.imap.p1.openshiftapps.com"
-  VERIFY_SSL: "true"
-  SSO_URL: "https://unifai-identity-tag-ai--pipeline.apps.stc-ai-e1-pp.imap.p1.openshiftapps.com"
-  UNIFAI_BASE_URL: "https://unifai-ui-tag-ai--pipeline.apps.stc-ai-e1-pp.imap.p1.openshiftapps.com"
+  VERIFY_SSL: "false"
+  SSO_URL: "https://unifai-identity-tag-ai--pipeline.apps.stc-ai-e1-prod.rtc9.p1.openshiftapps.com/"
+  UNIFAI_BASE_URL: "https://unifai-ui-tag-ai--pipeline.apps.stc-ai-e1-prod.rtc9.p1.openshiftapps.com/"
   UNIFAI_API_PREFIX: "/api2"
 
 # Health check configuration
