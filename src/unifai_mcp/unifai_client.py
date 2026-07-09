@@ -262,6 +262,210 @@ class UnifAIClient:
         resp.raise_for_status()
         return self._parse_json(resp)
 
+    # ── Catalog ───────────────────────────────────────────────
+
+    async def list_catalog_categories(self) -> list[str]:
+        """List all available resource categories (llms, tools, providers, …)."""
+        resp = await self._http.get("/catalog/categories.list.get")
+        resp.raise_for_status()
+        data = self._parse_json(resp)
+        return data.get("categories", []) if isinstance(data, dict) else []
+
+    async def list_catalog_elements(self) -> dict[str, list[dict[str, Any]]]:
+        """List all element types grouped by category."""
+        resp = await self._http.get("/catalog/elements.list.get")
+        resp.raise_for_status()
+        data = self._parse_json(resp)
+        return data.get("elements", {}) if isinstance(data, dict) else {}
+
+    async def get_element_spec(
+        self, category: str, element_type: str,
+    ) -> dict[str, Any]:
+        """Get the config schema and details for a specific element type."""
+        resp = await self._http.get(
+            "/catalog/element.spec.get",
+            params={"category": category, "type": element_type},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    # ── Resources (inventory items: tools, LLMs, providers, …) ─
+
+    async def create_resource(
+        self,
+        category: str,
+        element_type: str,
+        name: str,
+        config: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Create a new resource in the user's library."""
+        resp = await self._http.post(
+            "/resources/resource.save",
+            json={
+                "category": category,
+                "type": element_type,
+                "name": name,
+                "config": config,
+            },
+            params={"userId": user_id, "identityType": "user"},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def list_resources(
+        self,
+        user_id: str,
+        category: str | None = None,
+        element_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List resources in the user's library with optional filtering."""
+        params: dict[str, Any] = {
+            "userId": user_id,
+            "identityType": "user",
+            "limit": limit,
+            "offset": offset,
+        }
+        if category:
+            params["category"] = category
+        if element_type:
+            params["type"] = element_type
+        resp = await self._http.get("/resources/resources.list", params=params)
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def get_resource(self, resource_id: str) -> dict[str, Any]:
+        """Get a single resource by ID."""
+        resp = await self._http.get(
+            "/resources/resource.get",
+            params={"resourceId": resource_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def update_resource(
+        self,
+        resource_id: str,
+        config: dict[str, Any],
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing resource's config and/or name."""
+        body: dict[str, Any] = {"resourceId": resource_id, "config": config}
+        if name is not None:
+            body["name"] = name
+        resp = await self._http.put("/resources/resource.update", json=body)
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def delete_resource(self, resource_id: str) -> dict[str, Any]:
+        """Delete a resource from the user's library."""
+        resp = await self._http.delete(
+            "/resources/resource.delete",
+            params={"resourceId": resource_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def validate_resource_config(
+        self,
+        category: str,
+        element_type: str,
+        config: dict[str, Any],
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate a resource config before saving."""
+        body: dict[str, Any] = {
+            "category": category,
+            "type": element_type,
+            "config": config,
+        }
+        if name:
+            body["name"] = name
+        resp = await self._http.post("/resources/config.validate", json=body)
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    # ── Blueprint management (create / update / delete) ────────
+
+    async def save_blueprint(
+        self,
+        draft_dict: dict[str, Any],
+        user_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Save a new blueprint draft."""
+        import json as _json
+        body: dict[str, Any] = {
+            "blueprintRaw": _json.dumps(draft_dict),
+        }
+        if metadata:
+            body["metadata"] = metadata
+        resp = await self._http.post(
+            "/blueprints/blueprint.save",
+            json=body,
+            params={"userId": user_id, "identityType": "user"},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def update_blueprint(
+        self,
+        blueprint_id: str,
+        draft_dict: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Update an existing blueprint in-place."""
+        import json as _json
+        resp = await self._http.put(
+            "/blueprints/blueprint.update",
+            json={
+                "blueprintId": blueprint_id,
+                "blueprintRaw": _json.dumps(draft_dict),
+            },
+            params={"userId": user_id, "identityType": "user"},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def get_blueprint_info(self, blueprint_id: str) -> dict[str, Any]:
+        """Get blueprint details by ID."""
+        resp = await self._http.get(
+            "/blueprints/blueprint.info.get",
+            params={"blueprintId": blueprint_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def delete_blueprint(self, blueprint_id: str) -> dict[str, Any]:
+        """Delete a blueprint by ID."""
+        resp = await self._http.delete(
+            "/blueprints/remove.blueprint",
+            params={"blueprintId": blueprint_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def get_blueprint_draft_schema(self) -> dict[str, Any]:
+        """Get the JSON schema for blueprint drafts."""
+        resp = await self._http.get("/blueprints/blueprint.draft.schema.get")
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def validate_blueprint_draft(
+        self,
+        draft_dict: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate a blueprint draft without saving it."""
+        import json as _json
+        resp = await self._http.post(
+            "/blueprints/draft.validate",
+            json={"draft": _json.dumps(draft_dict)},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
     # ── Helpers ─────────────────────────────────────────────────
 
     @staticmethod

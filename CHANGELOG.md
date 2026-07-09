@@ -8,8 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Resource management tools**: `list_resources`, `get_resource_details`, `create_resource`, `update_resource`, `delete_resource`
+- **`get_resource_details`** resolves `$ref` IDs to human-readable resource names (LLM, provider, etc.)
+- **Workflow management tools**: `get_workflow_schema`, `create_workflow`, `update_workflow`, `validate_workflow`, `delete_workflow`, `get_workflow_details`
+- **Catalog tools**: `list_catalog`, `get_element_schema` for discovering available resource types and their config schemas
+- **Session tools**: `list_sessions`, `list_recent_5_sessions` for browsing workflow history
+- Full UnifAI REST API client coverage: catalog, resources, blueprints, sessions
+
+### Changed
+- **Renamed all "blueprint" tools to "workflow"** for consistency (e.g. `create_blueprint` → `create_workflow`, `get_blueprint_details` → `get_workflow_details`)
+- All user-facing output now uses "workflow" terminology instead of "blueprint"
+- Server instructions updated to reference workflows instead of blueprints
+
+## [0.2.0] - 2026-06-29
+
+### Added
 - Workflow execution timeout protection (5 minute default)
-- Blueprint caching with configurable TTL (5 minute default)
+- Workflow caching with configurable TTL (5 minute default)
 - Progress reporting with elapsed time for long-running workflows
 - `clear_cache()` method in UnifAIClient
 - `VERIFY_SSL` environment variable for SSL configuration
@@ -19,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSL verification now enabled by default (breaking change for self-signed cert environments)
 - Enhanced error handling in `run_workflow()` with better retry logic
 - Progress updates now show elapsed time every 30 seconds
-- Blueprint lookups now use cache by default (can be disabled with `use_cache=False`)
+- Workflow lookups now use cache by default (can be disabled with `use_cache=False`)
 
 ### Fixed
 - Workflows no longer hang indefinitely if execution gets stuck
@@ -30,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSL verification enabled by default to prevent MITM attacks
 - Added explicit warning when SSL verification is disabled
 
-## [0.1.0] - 2024-XX-XX
+## [0.1.0] - 2026-05-08
 
 ### Added
 - Initial release

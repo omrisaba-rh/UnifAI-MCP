@@ -114,7 +114,7 @@ mcp = FastMCP(
     instructions=(
         "MCP server for UnifAI — a multi-agent workflow orchestration platform. "
         "Authenticate with your Red Hat SSO credentials, then run AI workflows "
-        "by blueprint name or ID.\n\n"
+        "by workflow name or ID.\n\n"
         "IMPORTANT: Always call the 'authenticate' tool FIRST at the start of "
         "every conversation, even before the user asks for anything. The tool "
         "returns your recent UnifAI sessions and available workflows.\n\n"
@@ -296,7 +296,7 @@ async def authenticate(ctx: Context) -> str:
                         line += f"  ({started})"
                     line += f"  [id: {sid}]"
                     if bp_id:
-                        line += f"  [blueprint: {bp_id}]"
+                        line += f"  [workflow: {bp_id}]"
                     parts.append(line)
                     if summary:
                         parts.append(f"    Summary: {summary}")
@@ -338,7 +338,7 @@ async def authenticate(ctx: Context) -> str:
 
 @mcp.tool()
 async def list_workflows(ctx: Context) -> str:
-    """List all available UnifAI workflows (blueprints) for the current user."""
+    """List all available UnifAI workflows for the current user."""
     session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
     unifai.set_session_cookie(session_cookie)
@@ -374,8 +374,8 @@ async def run_workflow(
     """Run a UnifAI multi-agent workflow.
 
     Args:
-        workflow: Blueprint name (e.g. "Multi-Source Knowledge Search")
-                  or blueprint ID.
+        workflow: Workflow name (e.g. "Multi-Source Knowledge Search")
+                  or workflow ID.
         prompt:   The user question or instruction to send to the workflow.
     """
     session_cookie, username = _require_auth()
@@ -385,7 +385,7 @@ async def run_workflow(
     blueprint_id = await _resolve_blueprint(unifai, workflow, username)
 
     try:
-        await ctx.info(f"Creating session for blueprint {blueprint_id}...")
+        await ctx.info(f"Creating session for workflow {blueprint_id}...")
         session_id = await unifai.create_session(blueprint_id)
 
         await ctx.info(f"Submitting workflow (session {session_id})...")
@@ -418,7 +418,7 @@ async def run_workflow(
                 return (
                     f"Workflow execution timeout after {MAX_POLL_DURATION}s.\n"
                     f"Session : {session_id}\n"
-                    f"Blueprint: {blueprint_id}\n\n"
+                    f"Workflow: {blueprint_id}\n\n"
                     f"The workflow may still be running. Check the session status manually "
                     f"using get_session_chat with session_id: {session_id}"
                 )
@@ -454,7 +454,7 @@ async def run_workflow(
             return (
                 f"Workflow may have completed, but failed to retrieve results: {chat_exc}\n"
                 f"Session : {session_id}\n"
-                f"Blueprint: {blueprint_id}"
+                f"Workflow: {blueprint_id}"
             )
 
         output = chat.get("output", "")
@@ -464,7 +464,7 @@ async def run_workflow(
             return (
                 f"Workflow completed.\n"
                 f"Session : {session_id}\n"
-                f"Blueprint: {blueprint_id}\n\n"
+                f"Workflow: {blueprint_id}\n\n"
                 f"Result:\n{output}"
             )
 
@@ -472,7 +472,7 @@ async def run_workflow(
         return (
             f"Workflow completed.\n"
             f"Session : {session_id}\n"
-            f"Blueprint: {blueprint_id}\n\n"
+            f"Workflow: {blueprint_id}\n\n"
             f"Result:\n{formatted}"
         )
     except PermissionError:
@@ -481,7 +481,7 @@ async def run_workflow(
         logger.exception("Workflow execution failed for blueprint=%s", blueprint_id)
         return (
             f"Workflow execution failed. Please try again.\n"
-            f"Blueprint: {blueprint_id}"
+            f"Workflow: {blueprint_id}"
         )
 
 
@@ -489,7 +489,7 @@ async def run_workflow(
 async def list_sessions(ctx: Context, limit: int = 20) -> str:
     """List the current user's recent UnifAI workflow sessions.
 
-    Returns session IDs, titles, timestamps, and blueprint info so the user
+    Returns session IDs, titles, timestamps, and workflow info so the user
     can browse history or resume a previous session via get_session_chat.
 
     Args:
@@ -529,7 +529,7 @@ async def list_sessions(ctx: Context, limit: int = 20) -> str:
             line += f"  [{status}]"
         line += f"\n    id: {sid}"
         if bp_id:
-            line += f"  |  blueprint: {bp_id}"
+            line += f"  |  workflow: {bp_id}"
         lines.append(line)
 
     return "\n".join(lines)
@@ -576,7 +576,7 @@ async def list_recent_5_sessions(ctx: Context) -> str:
             line += f"  [{status}]"
         line += f"\n    id: {sid}"
         if bp_id:
-            line += f"  |  blueprint: {bp_id}"
+            line += f"  |  workflow: {bp_id}"
         lines.append(line)
 
     return "\n".join(lines)
@@ -627,6 +627,596 @@ async def get_session_chat(
         return "\n".join(lines)
 
     return f"Session {session_id} has no output or messages yet."
+
+
+# ── Catalog & Resource Management Tools ──────────────────────
+
+
+@mcp.tool()
+async def list_catalog(ctx: Context) -> str:
+    """List all available element types that can be created as resources.
+
+    Returns every category (tools, llms, providers, retrievers, nodes,
+    conditions) and the element types within each. Use this to discover
+    what kinds of resources can be created via create_resource.
+    """
+    _require_auth()
+    unifai = _get_unifai(ctx)
+
+    try:
+        elements = await unifai.list_catalog_elements()
+    except Exception:
+        logger.exception("Failed to list catalog elements")
+        return "Failed to list catalog. Please try again later."
+
+    if not elements:
+        return "No catalog elements found."
+
+    lines = ["Available element types:\n"]
+    for category, items in sorted(elements.items()):
+        lines.append(f"  {category}:")
+        for item in items:
+            name = item.get("name", item.get("type", "?"))
+            type_key = item.get("type", "?")
+            line = f"    - {name}  (type: {type_key})"
+            hints = item.get("hints", [])
+            if hints:
+                line += f"  [{', '.join(str(h) for h in hints)}]"
+            lines.append(line)
+        lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_element_schema(
+    category: str,
+    element_type: str,
+    ctx: Context,
+) -> str:
+    """Get the configuration schema for a specific element type.
+
+    Use this before create_resource to understand the required config
+    fields for the element you want to create.
+
+    Args:
+        category:     Resource category (e.g. "tools", "llms", "providers",
+                      "retrievers", "nodes", "conditions").
+        element_type: The type key (e.g. "mcp_proxy", "openai", "ssh_exec").
+    """
+    _require_auth()
+    unifai = _get_unifai(ctx)
+
+    try:
+        spec = await unifai.get_element_spec(category, element_type)
+    except Exception:
+        logger.exception("Failed to get element spec for %s/%s", category, element_type)
+        return f"Failed to get schema for {category}/{element_type}."
+
+    lines = [
+        f"Element: {spec.get('name', element_type)}",
+        f"Category: {spec.get('category', category)}",
+        f"Type: {spec.get('type', element_type)}",
+    ]
+    desc = spec.get("description", "")
+    if desc:
+        lines.append(f"Description: {desc}")
+
+    tags = spec.get("tags", [])
+    if tags:
+        lines.append(f"Tags: {', '.join(tags)}")
+
+    config_schema = spec.get("config_schema")
+    if config_schema:
+        lines.append(f"\nConfig schema:\n{json.dumps(config_schema, indent=2)}")
+
+    output_schema = spec.get("output_schema")
+    if output_schema:
+        lines.append(f"\nOutput schema:\n{json.dumps(output_schema, indent=2)}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def list_resources(
+    ctx: Context,
+    category: str = "",
+    element_type: str = "",
+) -> str:
+    """List the user's saved resources (tools, LLMs, providers, etc.).
+
+    Args:
+        category:     Optional filter by category (e.g. "tools", "llms").
+        element_type: Optional filter by type within category.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        result = await unifai.list_resources(
+            user_id=username,
+            category=category or None,
+            element_type=element_type or None,
+        )
+    except Exception:
+        logger.exception("Failed to list resources")
+        return "Failed to list resources. Please try again later."
+
+    resources = result.get("resources", []) if isinstance(result, dict) else []
+    pagination = result.get("pagination", {})
+
+    if not resources:
+        return "No resources found."
+
+    lines = [f"Resources ({pagination.get('total', len(resources))} total):\n"]
+    for r in resources:
+        rid = r.get("rid", "?")
+        name = r.get("name", "Unnamed")
+        cat = r.get("category", "?")
+        rtype = r.get("type", "?")
+        lines.append(f"  - {name}")
+        lines.append(f"    category: {cat}  |  type: {rtype}  |  id: {rid}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def create_resource(
+    category: str,
+    element_type: str,
+    name: str,
+    config: str,
+    ctx: Context,
+) -> str:
+    """Create a new resource in the user's inventory.
+
+    Use list_catalog and get_element_schema first to discover available
+    types and their required configuration.
+
+    Args:
+        category:     Resource category ("tools", "llms", "providers",
+                      "retrievers", "nodes", "conditions").
+        element_type: The type key (e.g. "mcp_proxy", "openai").
+        name:         Human-readable name for this resource.
+        config:       JSON string with the resource configuration matching
+                      the element's config schema.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        config_dict = json.loads(config)
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON in config: {exc}"
+
+    try:
+        doc = await unifai.create_resource(
+            category=category,
+            element_type=element_type,
+            name=name,
+            config=config_dict,
+            user_id=username,
+        )
+    except Exception as exc:
+        logger.exception("Failed to create resource %s/%s", category, element_type)
+        return f"Failed to create resource: {exc}"
+
+    rid = doc.get("rid", "?")
+    return (
+        f"Resource created successfully.\n"
+        f"  Name    : {name}\n"
+        f"  Category: {category}\n"
+        f"  Type    : {element_type}\n"
+        f"  ID      : {rid}"
+    )
+
+
+@mcp.tool()
+async def update_resource(
+    resource_id: str,
+    config: str,
+    ctx: Context,
+    name: str = "",
+) -> str:
+    """Update an existing resource's configuration and/or name.
+
+    Args:
+        resource_id: The resource ID to update.
+        config:      JSON string with the new configuration.
+        name:        Optional new name for the resource.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        config_dict = json.loads(config)
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON in config: {exc}"
+
+    try:
+        doc = await unifai.update_resource(
+            resource_id=resource_id,
+            config=config_dict,
+            name=name or None,
+        )
+    except Exception as exc:
+        logger.exception("Failed to update resource %s", resource_id)
+        return f"Failed to update resource: {exc}"
+
+    return (
+        f"Resource updated successfully.\n"
+        f"  ID  : {doc.get('rid', resource_id)}\n"
+        f"  Name: {doc.get('name', '?')}"
+    )
+
+
+@mcp.tool()
+async def delete_resource(
+    resource_id: str,
+    ctx: Context,
+) -> str:
+    """Delete a resource from the user's inventory.
+
+    Args:
+        resource_id: The resource ID to delete.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        result = await unifai.delete_resource(resource_id)
+    except Exception as exc:
+        logger.exception("Failed to delete resource %s", resource_id)
+        return f"Failed to delete resource: {exc}"
+
+    return f"Resource {resource_id} deleted successfully."
+
+
+# ── Resource Details ──────────────────────────────────────────
+
+
+@mcp.tool()
+async def get_resource_details(
+    resource_id: str,
+    ctx: Context,
+) -> str:
+    """Get the full details and configuration of a specific resource.
+
+    Returns the resource's name, category, type, and full configuration
+    so you can inspect how an agent, tool, LLM, provider, or retriever
+    is set up.
+
+    Args:
+        resource_id: The resource ID to retrieve (from list_resources).
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        doc = await unifai.get_resource(resource_id)
+    except Exception as exc:
+        logger.exception("Failed to get resource %s", resource_id)
+        return f"Failed to get resource: {exc}"
+
+    rid = doc.get("rid", resource_id)
+    name = doc.get("name", "Unnamed")
+    category = doc.get("category", "?")
+    rtype = doc.get("type", "?")
+    config = doc.get("cfg_dict") or doc.get("config") or {}
+
+    lines = [
+        f"Resource: {rid}",
+        f"  Name    : {name}",
+        f"  Category: {category}",
+        f"  Type    : {rtype}",
+    ]
+
+    identity = doc.get("identity")
+    if isinstance(identity, dict):
+        owner = identity.get("id") or identity.get("name", "")
+        if owner:
+            lines.append(f"  Owner   : {owner}")
+    elif doc.get("contributed_by"):
+        lines.append(f"  Owner   : {doc['contributed_by']}")
+
+    created = doc.get("created") or doc.get("created_at")
+    if created:
+        lines.append(f"  Created : {created}")
+
+    updated = doc.get("updated") or doc.get("updated_at")
+    if updated:
+        lines.append(f"  Updated : {updated}")
+
+    version = doc.get("version")
+    if version:
+        lines.append(f"  Version : {version}")
+
+    # Resolve referenced resource names
+    nested = doc.get("nested_refs", [])
+    ref_names: dict[str, str] = {}
+    if nested:
+        async def _fetch_name(ref_id: str) -> tuple[str, str]:
+            try:
+                ref_doc = await unifai.get_resource(ref_id)
+                ref_name = ref_doc.get("name", "?")
+                ref_cat = ref_doc.get("category", "")
+                ref_type = ref_doc.get("type", "")
+                label = ref_name
+                if ref_cat or ref_type:
+                    label += f"  ({ref_cat}/{ref_type})"
+                return ref_id, label
+            except Exception:
+                return ref_id, "?"
+
+        resolved = await asyncio.gather(*[_fetch_name(r) for r in nested])
+        ref_names = dict(resolved)
+
+        lines.append("\n  Referenced resources:")
+        for ref_id in nested:
+            lines.append(f"    - {ref_names.get(ref_id, '?')}  [id: {ref_id}]")
+
+    if config:
+        config_str = json.dumps(config, indent=2, default=str)
+        for ref_id, label in ref_names.items():
+            config_str = config_str.replace(
+                f"$ref:{ref_id}",
+                f"$ref:{ref_id} ({label})",
+            )
+        lines.append(f"\n  Configuration:\n{config_str}")
+
+    return "\n".join(lines)
+
+
+# ── Workflow Management Tools ────────────────────────────────
+
+
+@mcp.tool()
+async def get_workflow_schema(ctx: Context) -> str:
+    """Get the JSON schema for workflow drafts.
+
+    Returns the full schema describing the structure of a workflow,
+    including nodes, llms, tools, providers, retrievers, conditions,
+    and the execution plan. Use this to understand how to compose
+    a workflow for create_workflow.
+    """
+    _require_auth()
+    unifai = _get_unifai(ctx)
+
+    try:
+        schema = await unifai.get_blueprint_draft_schema()
+    except Exception:
+        logger.exception("Failed to get workflow schema")
+        return "Failed to get workflow schema."
+
+    return json.dumps(schema, indent=2)
+
+
+@mcp.tool()
+async def create_workflow(
+    workflow_json: str,
+    ctx: Context,
+    title: str = "",
+    description: str = "",
+) -> str:
+    """Create a new workflow.
+
+    The workflow defines a multi-agent graph with nodes, LLMs,
+    tools, providers, and an execution plan. Use get_workflow_schema
+    to understand the required structure.
+
+    Resources can be defined inline or referenced via $ref to saved
+    resource IDs from the user's inventory.
+
+    Args:
+        workflow_json: JSON string containing the workflow draft.
+                       Must include at least: nodes, plan, and a name.
+        title:         Optional title for the workflow metadata.
+        description:   Optional description for the workflow metadata.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        draft = json.loads(workflow_json)
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON in workflow: {exc}"
+
+    metadata: dict[str, Any] = {}
+    if title:
+        metadata["title"] = title
+    if description:
+        metadata["description"] = description
+
+    try:
+        result = await unifai.save_blueprint(
+            draft_dict=draft,
+            user_id=username,
+            metadata=metadata or None,
+        )
+        unifai.clear_cache()
+    except Exception as exc:
+        logger.exception("Failed to create workflow")
+        return f"Failed to create workflow: {exc}"
+
+    wf_id = result.get("blueprint_id", "?")
+    return (
+        f"Workflow created successfully.\n"
+        f"  ID    : {wf_id}\n"
+        f"  Name  : {draft.get('name', 'Untitled')}\n"
+        f"  Status: {result.get('status', '?')}"
+    )
+
+
+@mcp.tool()
+async def update_workflow(
+    workflow_id: str,
+    workflow_json: str,
+    ctx: Context,
+) -> str:
+    """Update an existing workflow in-place.
+
+    Args:
+        workflow_id:   The workflow ID to update.
+        workflow_json: JSON string with the full updated workflow draft.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        draft = json.loads(workflow_json)
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON in workflow: {exc}"
+
+    try:
+        result = await unifai.update_blueprint(
+            blueprint_id=workflow_id,
+            draft_dict=draft,
+            user_id=username,
+        )
+        unifai.clear_cache()
+    except Exception as exc:
+        logger.exception("Failed to update workflow %s", workflow_id)
+        return f"Failed to update workflow: {exc}"
+
+    return (
+        f"Workflow updated successfully.\n"
+        f"  ID    : {workflow_id}\n"
+        f"  Status: {result.get('status', '?')}"
+    )
+
+
+@mcp.tool()
+async def validate_workflow(
+    workflow_json: str,
+    ctx: Context,
+) -> str:
+    """Validate a workflow draft without saving it.
+
+    Use this to check a workflow for errors before calling create_workflow.
+
+    Args:
+        workflow_json: JSON string with the workflow draft to validate.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        draft = json.loads(workflow_json)
+    except json.JSONDecodeError as exc:
+        return f"Invalid JSON in workflow: {exc}"
+
+    try:
+        result = await unifai.validate_blueprint_draft(draft)
+    except Exception as exc:
+        logger.exception("Failed to validate workflow")
+        return f"Failed to validate workflow: {exc}"
+
+    is_valid = result.get("is_valid", False)
+    lines = [f"Validation result: {'VALID' if is_valid else 'INVALID'}"]
+
+    element_results = result.get("element_results", {})
+    if element_results:
+        for rid, er in element_results.items():
+            status = "OK" if er.get("is_valid") else "FAIL"
+            line = f"  [{status}] {rid}"
+            error = er.get("error", "")
+            if error:
+                line += f" — {error}"
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def delete_workflow(
+    workflow_id: str,
+    ctx: Context,
+) -> str:
+    """Delete a workflow.
+
+    Args:
+        workflow_id: The workflow ID to delete.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        result = await unifai.delete_blueprint(workflow_id)
+        unifai.clear_cache()
+    except Exception as exc:
+        logger.exception("Failed to delete workflow %s", workflow_id)
+        return f"Failed to delete workflow: {exc}"
+
+    return f"Workflow {workflow_id} deleted successfully."
+
+
+@mcp.tool()
+async def get_workflow_details(
+    workflow_id: str,
+    ctx: Context,
+) -> str:
+    """Get the full details of a specific workflow.
+
+    Args:
+        workflow_id: The workflow ID to retrieve.
+    """
+    session_cookie, username = _require_auth()
+    unifai = _get_unifai(ctx)
+    unifai.set_session_cookie(session_cookie)
+
+    try:
+        doc = await unifai.get_blueprint_info(workflow_id)
+    except Exception as exc:
+        logger.exception("Failed to get workflow %s", workflow_id)
+        return f"Failed to get workflow: {exc}"
+
+    spec = doc.get("spec_dict", {})
+    lines = [
+        f"Workflow: {doc.get('blueprint_id', workflow_id)}",
+        f"  Name       : {spec.get('name', 'Untitled')}",
+        f"  Description: {spec.get('description', '')}",
+        f"  Created    : {doc.get('created_at', '?')}",
+        f"  Updated    : {doc.get('updated_at', '?')}",
+    ]
+
+    metadata = doc.get("metadata", {})
+    if metadata:
+        lines.append(f"  Metadata   : {json.dumps(metadata)}")
+
+    for section in ("nodes", "llms", "tools", "providers", "retrievers", "conditions"):
+        items = spec.get(section, [])
+        if items:
+            lines.append(f"\n  {section} ({len(items)}):")
+            for item in items:
+                rid = item.get("rid", "?")
+                itype = item.get("type", "?")
+                iname = item.get("name", "")
+                line = f"    - {iname or rid}"
+                if itype != "?":
+                    line += f"  (type: {itype})"
+                lines.append(line)
+
+    plan = spec.get("plan", [])
+    if plan:
+        lines.append(f"\n  Plan ({len(plan)} steps):")
+        for step in plan:
+            uid = step.get("uid", "?")
+            node = step.get("node", "?")
+            after = step.get("after")
+            line = f"    {uid} → node: {node}"
+            if after:
+                deps = after if isinstance(after, list) else [after]
+                line += f"  (after: {', '.join(deps)})"
+            lines.append(line)
+
+    return "\n".join(lines)
 
 
 async def _resolve_blueprint(

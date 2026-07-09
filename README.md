@@ -9,19 +9,48 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 - **Dynamic Client Registration** — MCP clients self-register locally (no Keycloak redirect-URI allowlist needed)
 - **Automatic workflow discovery** — on authentication, available workflows are loaded into the LLM context for intelligent routing
 - **Concurrent data loading** — sessions and workflows are fetched in parallel for fast startup
-- **Smart caching** — blueprint data cached for 5 minutes to reduce API calls and improve performance
+- **Smart caching** — workflow data cached for 5 minutes to reduce API calls and improve performance
+- **Full resource management** — create, read, update, and delete resources (agents, LLMs, tools, providers, retrievers)
+- **Workflow lifecycle** — create, validate, update, and delete workflows with schema introspection
 - **Timeout protection** — workflows automatically timeout after 5 minutes to prevent indefinite waiting
 - **Progress reporting** — real-time updates with elapsed time during workflow execution
 - **Secure by default** — SSL verification enabled by default (configurable for dev environments)
 
 ## Tools
 
+### Workflow Execution
+
 | Tool | Description |
 |------|-------------|
 | `authenticate` | Check auth status, display profile & recent sessions, and silently load available workflows into context |
-| `list_workflows` | Explicitly list all available workflows (blueprints) with full details |
-| `run_workflow` | Run a UnifAI workflow by blueprint name or ID with a user prompt |
+| `list_workflows` | List all available workflows with full details |
+| `run_workflow` | Run a UnifAI workflow by name or ID with a user prompt |
 | `get_session_chat` | Retrieve the chat history and output of a previous workflow session |
+| `list_sessions` | List recent workflow sessions with titles, timestamps, and workflow info |
+| `list_recent_5_sessions` | Quick access to the 5 most recent sessions |
+
+### Resource Management
+
+| Tool | Description |
+|------|-------------|
+| `list_resources` | List saved resources (agents, LLMs, tools, providers, etc.) with optional filtering |
+| `get_resource_details` | Get full details and configuration of a specific resource, with resolved `$ref` names |
+| `create_resource` | Create a new resource in the user's inventory |
+| `update_resource` | Update an existing resource's configuration and/or name |
+| `delete_resource` | Delete a resource from the user's inventory |
+| `list_catalog` | List all available element types that can be created as resources |
+| `get_element_schema` | Get the configuration schema for a specific element type |
+
+### Workflow Management
+
+| Tool | Description |
+|------|-------------|
+| `get_workflow_details` | Get the full details of a specific workflow (nodes, plan, providers, etc.) |
+| `get_workflow_schema` | Get the JSON schema for composing workflow drafts |
+| `create_workflow` | Create a new workflow from a JSON draft |
+| `update_workflow` | Update an existing workflow in-place |
+| `validate_workflow` | Validate a workflow draft without saving it |
+| `delete_workflow` | Delete a workflow |
 
 ## How Workflow Routing Works
 
@@ -138,9 +167,9 @@ All settings are read from environment variables or a `.env` file:
 
 ```
 src/unifai_mcp/
-├── server.py           # MCP server, tools, workflow routing hints
+├── server.py           # MCP server, all tools (workflow, resource, catalog management)
 ├── config.py           # Pydantic settings (env vars / .env)
-├── unifai_client.py    # Async HTTP client for the UnifAI backend
+├── unifai_client.py    # Async HTTP client for the UnifAI backend (sessions, blueprints, resources, catalog)
 └── auth/
     ├── provider.py     # OAuth AS provider (Identity Service integration)
     ├── settings.py     # MCP auth settings (scopes, registration)
