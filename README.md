@@ -12,17 +12,25 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 - **Smart caching** — workflow data cached for 5 minutes to reduce API calls and improve performance
 - **Full resource management** — create, read, update, and delete resources (agents, LLMs, tools, providers, retrievers)
 - **Workflow lifecycle** — create, validate, update, and delete workflows with schema introspection
+- **Built-in guidance system** — interactive guides for new users covering quick start, workflow patterns, LLM selection, resource types, agent building, and system prompt best practices
+- **Smart UX directives** — the server instructs LLM clients to always offer 2-3 options, discover before building, explain trade-offs, and validate before saving
 - **Timeout protection** — workflows automatically timeout after 5 minutes to prevent indefinite waiting
 - **Progress reporting** — real-time updates with elapsed time during workflow execution
 - **Secure by default** — SSL verification enabled by default (configurable for dev environments)
 
 ## Tools
 
-### Workflow Execution
+### Discovery & Guidance
 
 | Tool | Description |
 |------|-------------|
 | `authenticate` | Check auth status, display profile & recent sessions, and silently load available workflows into context |
+| `get_guide` | Interactive guidance on any topic: `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts` |
+
+### Workflow Execution
+
+| Tool | Description |
+|------|-------------|
 | `list_workflows` | List all available workflows with full details |
 | `run_workflow` | Run a UnifAI workflow by name or ID with a user prompt |
 | `get_session_chat` | Retrieve the chat history and output of a previous workflow session |

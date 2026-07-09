@@ -8,9 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`get_guide` tool**: Interactive guidance system with 7 topics — `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts`
+- **Enhanced server instructions**: UX directives for LLM clients — always offer 2-3 options, discover before building, explain trade-offs, validate before saving
+- **Cursor rule** (`.cursor/rules/unifai-guide.mdc`): Persistent Cursor-specific guidance for working with UnifAI
 - **Resource management tools**: `list_resources`, `get_resource_details`, `create_resource`, `update_resource`, `delete_resource`
 - **`get_resource_details`** resolves `$ref` IDs to human-readable resource names (LLM, provider, etc.)
 - **Workflow management tools**: `get_workflow_schema`, `create_workflow`, `update_workflow`, `validate_workflow`, `delete_workflow`, `get_workflow_details`
+- **Auto-enrichment of `$ref` entries**: `create_workflow`, `update_workflow`, and `validate_workflow` now auto-populate missing `name` and `type` fields for referenced resources
 - **Catalog tools**: `list_catalog`, `get_element_schema` for discovering available resource types and their config schemas
 - **Session tools**: `list_sessions`, `list_recent_5_sessions` for browsing workflow history
 - Full UnifAI REST API client coverage: catalog, resources, blueprints, sessions
@@ -18,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Renamed all "blueprint" tools to "workflow"** for consistency (e.g. `create_blueprint` → `create_workflow`, `get_blueprint_details` → `get_workflow_details`)
 - All user-facing output now uses "workflow" terminology instead of "blueprint"
-- Server instructions updated to reference workflows instead of blueprints
+- Server instructions completely rewritten with UX guidelines, key concepts, and workflow pattern reference
 
 ## [0.2.0] - 2026-06-29
 

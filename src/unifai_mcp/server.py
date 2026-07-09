@@ -109,20 +109,76 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[dict]:
 
 # ── MCP Server ──────────────────────────────────────────────────
 
+_INSTRUCTIONS = """\
+MCP server for UnifAI — a multi-agent workflow orchestration platform.
+Authenticate with your Red Hat SSO credentials, then run AI workflows
+by workflow name or ID.
+
+═══ STARTUP ═══
+Always call 'authenticate' FIRST at the start of every conversation.
+Present only the recent sessions to the user and ask if they'd like to
+continue or start something new. Do NOT list the available workflows —
+use them silently when deciding which workflow to invoke via run_workflow.
+
+═══ USER EXPERIENCE GUIDELINES ═══
+You are a helpful UnifAI assistant. Follow these rules to provide
+the best experience:
+
+1. ALWAYS OFFER CHOICES: When the user wants to create or configure
+   something, present 2-3 concrete options with trade-offs. Never
+   assume a single answer. Example: "For the LLM, you could use:
+   (A) Gemini 3.1 Pro — best reasoning, (B) Gemini Flash — faster
+   and cheaper, (C) bring your own model."
+
+2. DISCOVER BEFORE BUILDING: Before creating any resource, call
+   list_resources and list_catalog to see what the user already has
+   and what's available. Reuse existing resources when possible.
+
+3. GUIDE NEW USERS: If the user has few or no resources, proactively
+   explain what they can build. Call get_guide("quick_start") for a
+   step-by-step walkthrough.
+
+4. EXPLAIN TRADE-OFFS: When recommending a workflow pattern, LLM,
+   or configuration, briefly explain why and what alternatives exist.
+
+5. VALIDATE BEFORE SAVING: Use validate_workflow before create_workflow
+   to catch errors early and give the user a chance to fix them.
+
+6. SHOW WHAT YOU BUILT: After creating resources or workflows, use
+   get_resource_details or get_workflow_details to show the user
+   exactly what was created.
+
+7. DESCRIBE WHAT YOU BUILD: When creating a workflow, always include
+   a meaningful description that summarizes the workflow's purpose
+   and lists the agents it contains. Users should understand what a
+   workflow does at a glance from its description.
+
+═══ KEY CONCEPTS ═══
+• RESOURCE: A reusable building block — an LLM, tool, MCP provider,
+  agent node, retriever, or router condition.
+• WORKFLOW: A multi-agent graph that wires resources together with
+  an execution plan. Contains nodes, a plan, and optional conditions.
+• $ref: Resources are referenced by ID using "$ref:<resource_id>".
+  The system resolves these to the saved resource automatically.
+
+═══ COMMON WORKFLOW PATTERNS ═══
+• SINGLE AGENT: User → Agent → Answer. Simple, one tool/provider.
+• ORCHESTRATOR: User → Orchestrator → [Agent A, Agent B, ...] → Answer.
+  Best for multi-source tasks. The orchestrator plans and delegates.
+  Agents can serve any role (data, reporting, analysis, etc.) —
+  the orchestrator treats all branches the same.
+• SEQUENTIAL PIPELINE: User → Agent A → Agent B → Answer.
+  Best when output of one feeds into another (e.g. fetch → report).
+
+═══ AVAILABLE GUIDES ═══
+Call get_guide(topic) for detailed help on any of these topics:
+  quick_start, workflow_patterns, llm_selection, resource_types,
+  build_agent, build_workflow, system_prompts
+"""
+
 mcp = FastMCP(
     "UnifAI",
-    instructions=(
-        "MCP server for UnifAI — a multi-agent workflow orchestration platform. "
-        "Authenticate with your Red Hat SSO credentials, then run AI workflows "
-        "by workflow name or ID.\n\n"
-        "IMPORTANT: Always call the 'authenticate' tool FIRST at the start of "
-        "every conversation, even before the user asks for anything. The tool "
-        "returns your recent UnifAI sessions and available workflows.\n\n"
-        "Present only the recent sessions to the user and ask if they'd like to "
-        "continue or start something new. Do NOT list the available workflows to "
-        "the user — use them silently when deciding which workflow to invoke via "
-        "run_workflow. Pick the most specific workflow matching the user's intent."
-    ),
+    instructions=_INSTRUCTIONS,
     auth_server_provider=auth_provider,
     auth=auth_settings,
     lifespan=lifespan,
@@ -334,6 +390,736 @@ async def authenticate(ctx: Context) -> str:
                     parts.append(line)
 
     return "\n".join(parts)
+
+
+# ── Guide / Help ─────────────────────────────────────────────
+
+_GUIDES: dict[str, str] = {
+    "quick_start": """\
+═══ QUICK START: Build Your First UnifAI Agent ═══
+
+Follow these steps to go from zero to a working agent workflow:
+
+STEP 1 — Choose what your agent will connect to
+  Ask yourself: "What data source or service does my agent need?"
+  Common choices:
+    • Confluence → search/read wiki pages
+    • Jira → manage issues and boards
+    • Google Workspace → Gmail, Calendar, Drive
+    • GitHub/GitLab → repos, PRs, issues
+    • A custom API → via MCP server
+
+STEP 2 — Create or reuse an MCP Provider
+  Run: list_resources(category="providers") to see existing providers.
+  If yours isn't there, create one:
+    get_element_schema(category="providers", element_type="mcp_server")
+    create_resource(category="providers", element_type="mcp_server", ...)
+
+STEP 3 — Choose an LLM
+  Run: list_resources(category="llms") to see available LLMs.
+  Decision guide:
+    • Need speed + low cost?     → Gemini Flash variants
+    • Need strong reasoning?     → Gemini 3.1 Pro
+    • Need orchestration/planning? → Gemini Pro (Orchestrator variant)
+    • Have your own model?       → OpenAI-compatible endpoint
+  If none fit, create one:
+    get_element_schema(category="llms", element_type="google_genai")
+    create_resource(category="llms", element_type="google_genai", ...)
+
+STEP 4 — Create the Agent Node
+  Combine your LLM + Provider + a system prompt:
+    create_resource(
+      category="nodes", element_type="custom_agent_node",
+      name="My Agent",
+      config={"llm": "$ref:<llm_id>", "providers": ["$ref:<provider_id>"],
+              "system_message": "You are a helpful assistant that...",
+              "strategy_type": "react", "max_rounds": 100}
+    )
+
+STEP 5 — Wrap it in a Workflow
+  Create a workflow that wires the agent between user input and output.
+  Built-in nodes (user_question, final_answer) MUST include rid, name,
+  type, AND config — otherwise the UI renders them incorrectly.
+  Always include a description that summarizes the workflow's purpose
+  and the agents it contains.
+
+    create_workflow(workflow_json='{
+      "name": "My Workflow",
+      "nodes": [
+        {"rid": "user_question", "name": "User Question Node",
+         "type": "user_question_node",
+         "config": {"retries": 1, "type": "user_question_node"}},
+        {"rid": "final_answer", "name": "Final Answer Node",
+         "type": "final_answer_node",
+         "config": {"retries": 1, "type": "final_answer_node"}},
+        {"rid": "$ref:<agent_id>", "name": "My Agent",
+         "type": null}
+      ],
+      "plan": [
+        {"uid": "user_input", "node": "user_question",
+         "meta": {"description": "", "display_name": "", "tags": []}},
+        {"uid": "MyAgent-<id>-3", "node": "<agent_id>",
+         "after": "user_input",
+         "meta": {"description": "", "display_name": "", "tags": []}},
+        {"uid": "finalize", "node": "final_answer",
+         "after": "MyAgent-<id>-3",
+         "meta": {"description": "", "display_name": "", "tags": []}}
+      ]
+    }')
+
+  For orchestrator workflows, see get_guide("workflow_patterns")
+  — they additionally require branches, exit_condition, and a
+  conditions array with a router_direct condition.
+
+STEP 6 — Test it!
+  run_workflow(workflow="My Workflow", prompt="Hello, can you help me?")
+""",
+
+    "workflow_patterns": """\
+═══ WORKFLOW PATTERNS ═══
+
+Choose the pattern that best fits your use case:
+
+─── Pattern 1: SINGLE AGENT ───
+  Flow: User → Agent → Answer
+  Best for: Simple tasks with one data source.
+  Example: "Search Confluence for X" or "List my Jira tickets"
+
+  JSON structure:
+    "nodes": [
+      {"rid": "user_question", "name": "User Question Node",
+       "type": "user_question_node",
+       "config": {"retries": 1, "type": "user_question_node"}},
+      {"rid": "final_answer", "name": "Final Answer Node",
+       "type": "final_answer_node",
+       "config": {"retries": 1, "type": "final_answer_node"}},
+      {"rid": "$ref:<agent_id>", "name": "My Agent",
+       "type": null}
+    ],
+    "plan": [
+      {"uid": "user_input", "node": "user_question",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "Agent-<id>-3", "node": "<agent_id>",
+       "after": "user_input",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "finalize", "node": "final_answer",
+       "after": "Agent-<id>-3",
+       "meta": {"description": "", "display_name": "", "tags": []}}
+    ]
+
+─── Pattern 2: ORCHESTRATOR (Fan-Out) ───
+  Flow: User → Orchestrator → [Agent A, Agent B, ...] → Answer
+  Best for: Questions that need multiple sources. The orchestrator
+  decides which agents to call and synthesizes their responses.
+  Example: "Find info about project X across Jira and Confluence"
+
+  CRITICAL — ORDER MATTERS when building an orchestrator:
+    The router (exit_condition) MUST be set on the orchestrator
+    BEFORE branches are added. The router is the mechanism that
+    enables branching — without it, branches have no effect and
+    the orchestrator will complete immediately with empty output.
+
+    Build in this order:
+      1. Add the router_direct condition to the "conditions" array
+      2. Set "exit_condition" on the orchestrator step (BARE
+         resource ID, no $ref: prefix!)
+      3. THEN set "branches" on the orchestrator step
+
+  Orchestrator steps require THREE extra fields:
+    • "exit_condition": "<router_resource_id>" — BARE resource ID
+      (no $ref: prefix!) of a router_direct condition. SET THIS
+      FIRST — it enables branching.
+    • "branches": {step_uid: step_uid, ..., "finalize": "finalize"}
+      — maps STEP UIDs to STEP UIDs. Branch keys AND values are
+      step UIDs (not resource IDs, not arbitrary names). MUST
+      include "finalize": "finalize" so the orchestrator can route
+      to the final answer when done. SET THIS AFTER exit_condition.
+    • "after": ["user_input", ...all agent step UIDs] — creates
+      return edges FROM agents back TO the orchestrator.
+
+  The "after" + "branches" combination creates BIDIRECTIONAL
+  edges. Without both, the orchestrator cannot delegate or the
+  graph has validation errors.
+
+  IMPORTANT: The "finalize" step must have NO "after" dependency.
+  The orchestrator handles routing to finalize internally via its
+  branches. Adding "after" on finalize blocks runtime execution.
+
+  IMPORTANT: Plan "node" values use BARE resource IDs (not $ref:).
+  The $ref: prefix is only for the "rid" field in the nodes array.
+
+  The router_direct condition must also be in the workflow's
+  "conditions" array with name, type, AND config.
+
+  JSON structure:
+    "nodes": [
+      {"rid": "user_question", "name": "User Question Node",
+       "type": "user_question_node",
+       "config": {"retries": 1, "type": "user_question_node"}},
+      {"rid": "final_answer", "name": "Final Answer Node",
+       "type": "final_answer_node",
+       "config": {"retries": 1, "type": "final_answer_node"}},
+      {"rid": "$ref:<orch_id>", "name": "My Orchestrator",
+       "type": null},
+      {"rid": "$ref:<agent_a_id>", "name": "Agent A",
+       "type": null},
+      {"rid": "$ref:<agent_b_id>", "name": "Agent B",
+       "type": null}
+    ],
+    "conditions": [
+      {"rid": "$ref:<router_id>", "name": "Router",
+       "type": "router_direct",
+       "config": {"type": "router_direct"}}
+    ],
+    "plan": [
+      {"uid": "user_input", "node": "user_question",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "finalize", "node": "final_answer",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "AgentA-<a_id>-4", "node": "<agent_a_id>",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "AgentB-<b_id>-5", "node": "<agent_b_id>",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "Orch-<orch_id>-3", "node": "<orch_id>",
+       "after": ["user_input", "AgentA-<a_id>-4",
+                  "AgentB-<b_id>-5"],
+       "exit_condition": "<router_id>",
+       "branches": {
+         "AgentA-<a_id>-4": "AgentA-<a_id>-4",
+         "AgentB-<b_id>-5": "AgentB-<b_id>-5",
+         "finalize": "finalize"},
+       "meta": {"description": "", "display_name": "", "tags": []}}
+    ]
+
+  Agent steps have NO "after" — they are branch targets of the
+  orchestrator, which excludes them from being start nodes.
+
+  NOTE: Agents in an orchestrator can serve any role — data
+  fetching, reporting, analysis, summarization, etc. The
+  orchestrator treats all branches the same: delegate a task,
+  get a result. For example, a "Reporter" agent is just another
+  custom_agent_node with a system prompt focused on formatting
+  and summarizing. To add it, simply include it as another
+  branch in the orchestrator's branches and after lists.
+
+─── Pattern 3: SEQUENTIAL PIPELINE ───
+  Flow: User → Agent A → Agent B → Answer
+  Best for: When one agent's output feeds into the next.
+  Example: "Fetch data from Jira, then generate a report"
+
+  Plan structure:
+    user_input → agent_a (after: user_input)
+    agent_b (after: agent_a)
+    finalize (after: agent_b)
+
+─── CHOOSING THE RIGHT PATTERN ───
+  • One data source, simple task → Pattern 1
+  • Multiple sources, flexible routing → Pattern 2
+    (includes any mix of agents: data, reporter, analysis, etc.)
+  • Data transformation pipeline → Pattern 3
+""",
+
+    "llm_selection": """\
+═══ LLM SELECTION GUIDE ═══
+
+Choose the right LLM based on your needs:
+
+─── SPEED vs QUALITY TRADE-OFF ───
+
+  FAST (low latency, lower cost):
+    • Gemini Flash — great for simple tool-calling, search, CRUD
+    • Gemini Flash Lite — even faster, good for routing/classification
+    Best for: Agents doing straightforward tasks (search, list, create)
+
+  BALANCED:
+    • Gemini 3.1 Pro — strong reasoning + tool use
+    Best for: Complex agents that need to plan multi-step actions
+
+  SPECIALIZED:
+    • Gemini Pro (Orchestrator variant) — tuned for work planning
+    Best for: Orchestrator nodes that coordinate multiple agents
+    • Qwen / OpenAI-compatible — self-hosted or custom models
+    Best for: Specialized tasks, private data, or cost control
+
+─── RECOMMENDATIONS BY USE CASE ───
+
+  Simple tool-calling agent (Jira, Confluence, etc.)
+    → Gemini Flash (fast, cost-effective)
+
+  Complex reasoning agent (analysis, troubleshooting)
+    → Gemini 3.1 Pro (best quality)
+
+  Orchestrator (plans and delegates)
+    → Gemini 3.1 Pro or Orchestrator variant
+
+  Report generator (formatting, synthesis)
+    → Gemini 3.1 Pro or Qwen (good at structured output)
+
+─── KEY PARAMETERS ───
+
+  max_tokens: How much output the model can generate.
+    • 8192 (default) — fine for most agents
+    • 32768+ — needed for long reports or code generation
+
+  temperature: Creativity vs consistency.
+    • 0.0-0.3 — deterministic, best for tool-calling agents
+    • 0.5-0.7 — balanced (default)
+    • 0.8-1.0 — creative, best for writing/brainstorming
+""",
+
+    "resource_types": """\
+═══ RESOURCE TYPES GUIDE ═══
+
+UnifAI resources are reusable building blocks organized by category:
+
+─── NODES (Agents & Orchestrators) ───
+  custom_agent_node
+    The standard agent. Has an LLM, MCP providers, tools, retriever,
+    and a system prompt. Uses the ReAct strategy by default.
+    → Use for: Any agent that calls tools to accomplish tasks.
+    Config: llm, providers[], tools[], retriever, system_message,
+      strategy_type ("react"), max_rounds (100)
+
+  orchestrator_node
+    Coordinates work by creating plans, delegating to adjacent nodes,
+    and synthesizing results. Has built-in planning/delegation logic
+    — you just give it an LLM and connect it to agent nodes in the
+    workflow via branches.
+    → Use for: Multi-agent coordination and routing.
+    Config: llm, tools[], system_message, max_rounds (100)
+    NOTE: No providers — orchestrators delegate, not call tools.
+
+  claude_agent_node
+    Autonomous agent powered by the Claude Agent SDK via Vertex AI.
+    Runs full Claude sessions with file I/O, bash, web search, etc.
+    Has its own model selection and effort/reasoning controls.
+    → Use for: Complex autonomous tasks, code generation, deep
+      analysis, tasks needing Claude's strengths.
+    Config: vertex_project_id, vertex_region ("us-east5"),
+      model ("claude-sonnet-4-6"), system_prompt,
+      max_turns (200), effort ("low"/"medium"/"high"/"xhigh"),
+      permission_mode ("bypassPermissions"/"acceptEdits"/"plan"),
+      allowed_tools[], disallowed_tools[], skills_repos{},
+      providers[], tools[], retriever
+    NOTE: Does NOT use a UnifAI LLM resource — it connects to
+      Claude directly via Vertex AI project credentials.
+
+  a2a_agent_node
+    Delegates work to a remote agent via the Agent-to-Agent (A2A)
+    protocol. Minimal config — just the endpoint URL.
+    → Use for: Calling external agent services, cross-platform
+      agent communication, microservice-style agent architectures.
+    Config: base_url, bearer_token (optional), agent_card (auto-
+      fetched), retriever
+    NOTE: No LLM, no providers — the remote agent handles
+      everything. You just point to its URL.
+
+  deep_agent_node
+    Powered by LangChain Deep Agents with built-in planning (todos),
+    context management, and automatic subagent delegation.
+    → Use for: Complex multi-step reasoning, tasks needing
+      structured planning and context tracking.
+    Config: llm, providers[], tools[], retriever,
+      system_message, cwd, env_vars{}
+
+─── PROVIDERS (External Connections) ───
+  mcp_server
+    Connects to an external MCP server that provides tools.
+    → Use for: Jira, Confluence, Google Workspace, GitHub, Salesforce,
+    or any service exposed via MCP.
+
+─── LLMs (Language Models) ───
+  google_genai
+    Google Gemini models. Configure model name, API key, temperature.
+    → Use for: Most agents. Wide range of models available.
+
+  openai
+    OpenAI-compatible endpoint. Works with OpenAI, Azure, or any
+    compatible API (vLLM, Ollama, etc.).
+    → Use for: Custom/self-hosted models or OpenAI models.
+
+─── TOOLS ───
+  ssh_exec — Run commands over SSH on a remote host.
+  oc_exec — Run commands on an OpenShift cluster.
+  web_fetch — Fetch and parse content from a URL.
+
+─── RETRIEVERS ───
+  docs_rag — RAG retriever over a document collection.
+    → Use for: Searching through uploaded documents.
+
+─── CONDITIONS ───
+  router_direct — Routes execution based on LLM classification.
+    → Use for: Conditional branching in workflows.
+""",
+
+    "build_agent": """\
+═══ HOW TO BUILD AN AGENT ═══
+
+STEP 0 — Choose the right agent type
+  Ask: "What kind of agent fits this task?"
+
+  custom_agent_node (DEFAULT — use for most tasks)
+    Standard agent with LLM + MCP providers + system prompt.
+    Best for: tool-calling agents (Jira, Confluence, Google, etc.)
+
+  orchestrator_node (COORDINATOR — not a standalone agent)
+    Plans work and delegates to other agents via branches.
+    Best for: multi-agent workflows. See build_workflow guide.
+
+  claude_agent_node (AUTONOMOUS — Claude SDK)
+    Runs full Claude sessions with built-in tools (file I/O,
+    bash, web search). Connects to Claude via Vertex AI.
+    Best for: complex autonomous tasks, code generation, deep
+    analysis. Does NOT use a UnifAI LLM resource.
+
+  a2a_agent_node (REMOTE — external agent)
+    Delegates to a remote agent via the A2A protocol. Just needs
+    a URL endpoint. No LLM, no providers.
+    Best for: calling external agent services.
+
+  deep_agent_node (ADVANCED — LangChain Deep Agents)
+    Built-in planning (todos), context management, and subagent
+    delegation. Similar to custom_agent but with deeper reasoning.
+    Best for: complex multi-step tasks needing structured planning.
+
+  If unsure, start with custom_agent_node — it covers most cases.
+
+═══ BUILDING A CUSTOM AGENT (custom_agent_node) ═══
+
+STEP 1 — Decide what it connects to
+  Run: list_resources(category="providers")
+  See existing MCP providers. Pick one or create a new one.
+
+STEP 2 — Pick an LLM
+  Run: list_resources(category="llms")
+  Quick picks:
+    • Simple tasks → Gemini Flash
+    • Complex reasoning → Gemini 3.1 Pro
+    Call get_guide("llm_selection") for detailed guidance.
+
+STEP 3 — Write a system prompt
+  Good system prompts include:
+    • ROLE: "You are a [specific role] assistant that..."
+    • CAPABILITIES: What tools/data the agent has access to
+    • RESPONSE FORMAT: How to structure output (tables, citations)
+    • CONSTRAINTS: What NOT to do (no guessing, no PII, etc.)
+    • TONE: Professional, concise, collaborative, etc.
+  Tip: Be specific! "You are a Jira expert agent" > "helpful assistant"
+
+STEP 4 — Create the resource
+  create_resource(
+    category="nodes",
+    element_type="custom_agent_node",
+    name="My Agent Name",
+    config='{
+      "llm": "$ref:<llm_id>",
+      "providers": ["$ref:<provider_id>"],
+      "system_message": "<your system prompt>",
+      "strategy_type": "react",
+      "max_rounds": 100,
+      "retries": 1
+    }'
+  )
+
+STEP 5 — Verify
+  get_resource_details(resource_id="<new_id>")
+
+OPTIONS: max_rounds (100), retries (1), strategy_type ("react"),
+  retriever (optional RAG), tools (ssh_exec, web_fetch, etc.)
+
+═══ BUILDING A CLAUDE AGENT (claude_agent_node) ═══
+
+Claude agents connect directly to Claude via Vertex AI — they
+do NOT use a UnifAI LLM resource.
+
+STEP 1 — Get Vertex AI credentials
+  You need: vertex_project_id and vertex_region (default: us-east5)
+
+STEP 2 — Choose model and effort
+  Models: claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5
+  Effort: low (fast), medium (balanced), high (deep), xhigh (Opus only)
+
+STEP 3 — Create the resource
+  create_resource(
+    category="nodes",
+    element_type="claude_agent_node",
+    name="My Claude Agent",
+    config='{
+      "vertex_project_id": "<gcp_project>",
+      "vertex_region": "us-east5",
+      "model": "claude-sonnet-4-6",
+      "system_prompt": "<your system prompt>",
+      "max_turns": 200,
+      "effort": "medium",
+      "providers": ["$ref:<provider_id>"],
+      "retries": 1
+    }'
+  )
+
+OPTIONS: permission_mode ("bypassPermissions"/"acceptEdits"/"plan"),
+  allowed_tools[], disallowed_tools[], skills_repos{}, env_vars{}
+
+═══ BUILDING AN A2A AGENT (a2a_agent_node) ═══
+
+A2A agents delegate to a remote agent — no LLM, no providers.
+Just point to the URL and optionally authenticate.
+
+  create_resource(
+    category="nodes",
+    element_type="a2a_agent_node",
+    name="My Remote Agent",
+    config='{
+      "base_url": "http://<remote-agent-host>:10000",
+      "bearer_token": "<optional_token>",
+      "retries": 1
+    }'
+  )
+
+The agent_card is auto-fetched from the remote endpoint.
+
+═══ BUILDING A DEEP AGENT (deep_agent_node) ═══
+
+Similar to custom_agent but with LangChain Deep Agent features:
+built-in todo planning, context management, and subagent delegation.
+
+  create_resource(
+    category="nodes",
+    element_type="deep_agent_node",
+    name="My Deep Agent",
+    config='{
+      "llm": "$ref:<llm_id>",
+      "providers": ["$ref:<provider_id>"],
+      "system_message": "<your system prompt>",
+      "retries": 1
+    }'
+  )
+
+OPTIONS: tools[], retriever, cwd, env_vars{}
+""",
+
+    "build_workflow": """\
+═══ HOW TO BUILD A WORKFLOW ═══
+
+A workflow wires agents together with an execution plan.
+
+STEP 1 — Choose your pattern
+  Call get_guide("workflow_patterns") for detailed options.
+  Quick decision:
+    • 1 agent → Single Agent pattern
+    • Multiple agents, flexible routing → Orchestrator pattern
+    • Chain of agents → Sequential Pipeline
+
+STEP 2 — Gather your node IDs
+  Run: list_resources(category="nodes")
+  Note the IDs of the agents you want to include.
+  Every workflow needs these built-in nodes:
+    • "user_question" — captures user input (type: user_question_node)
+    • "final_answer" — returns the response (type: final_answer_node)
+
+STEP 3 — Define the nodes array
+  Built-in nodes MUST include rid, name, type, AND config with
+  retries. Referenced nodes use $ref: in rid and set type to null:
+    "nodes": [
+      {"rid": "user_question", "name": "User Question Node",
+       "type": "user_question_node",
+       "config": {"retries": 1, "type": "user_question_node"}},
+      {"rid": "final_answer", "name": "Final Answer Node",
+       "type": "final_answer_node",
+       "config": {"retries": 1, "type": "final_answer_node"}},
+      {"rid": "$ref:<agent_1_id>", "name": "Agent 1",
+       "type": null},
+      {"rid": "$ref:<agent_2_id>", "name": "Agent 2",
+       "type": null}
+    ]
+
+  Without all four fields (rid, name, type, config) on built-in
+  nodes, the UI will render them as generic red boxes instead of
+  properly styled system nodes.
+
+STEP 4 — Define the execution plan
+  Each step has: uid (unique name), node (which node to run),
+  and after (dependencies — what must complete first).
+  Use the UID convention: {NodeName}-{resourceId}-{number}
+  Every step should include a "meta" field for UI display:
+    "meta": {"description": "", "display_name": "", "tags": []}
+
+  Example (single agent):
+    "plan": [
+      {"uid": "user_input", "node": "user_question",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "MyAgent-<id>-3", "node": "<agent_id>",
+       "after": "user_input",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "finalize", "node": "final_answer",
+       "after": "MyAgent-<id>-3",
+       "meta": {"description": "", "display_name": "", "tags": []}}
+    ]
+
+  Example (orchestrator with 2 agents — REQUIRES branches):
+    ORDER MATTERS: The router (exit_condition) must be set on
+    the orchestrator BEFORE branches. Without the router,
+    branches have no effect and the orchestrator completes
+    immediately with empty output.
+    See workflow_patterns guide for the full structure.
+
+    "conditions": [
+      {"rid": "$ref:<router_id>", "name": "Router",
+       "type": "router_direct",
+       "config": {"type": "router_direct"}}
+    ],
+    "plan": [
+      {"uid": "user_input", "node": "user_question",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "finalize", "node": "final_answer",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "AgentA-<a_id>-4", "node": "<agent_a_id>",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "AgentB-<b_id>-5", "node": "<agent_b_id>",
+       "meta": {"description": "", "display_name": "", "tags": []}},
+      {"uid": "Orch-<orch_id>-3", "node": "<orch_id>",
+       "after": ["user_input", "AgentA-<a_id>-4",
+                  "AgentB-<b_id>-5"],
+       "exit_condition": "<router_id>",
+       "branches": {
+         "AgentA-<a_id>-4": "AgentA-<a_id>-4",
+         "AgentB-<b_id>-5": "AgentB-<b_id>-5",
+         "finalize": "finalize"},
+       "meta": {"description": "", "display_name": "", "tags": []}}
+    ]
+
+STEP 5 — Validate, then create
+  validate_workflow(workflow_json="...")  — checks resource
+  availability. Note: this does NOT check graph structure
+  (orphans, required nodes, cycles). The UI canvas runs those
+  additional checks. Never save a workflow with structural errors.
+
+  Include a meaningful description that summarizes what the
+  workflow does and which agents it contains. This helps users
+  understand the workflow at a glance in the UI.
+  Example: "Orchestrator workflow that queries Google Workspace
+  and Jira Cloud via dedicated agents, then produces a polished
+  summary via a Reporter agent."
+
+  create_workflow(workflow_json="...", title="My Workflow",
+    description="<describe the workflow and its agents>")
+
+STEP 6 — Test it
+  run_workflow(workflow="My Workflow", prompt="Test question")
+  Verify the result contains actual output — not just a COMPLETED
+  status with empty output. If the workflow completes but returns
+  empty output, see TROUBLESHOOTING below.
+
+TROUBLESHOOTING:
+  Workflow completes but returns empty output:
+    • Missing exit_condition — the orchestrator needs a router
+      to know how to delegate. Check that exit_condition is set
+      with a BARE condition resource ID (no $ref: prefix).
+    • Missing branches — the orchestrator needs branch targets.
+      Branches must be set AFTER exit_condition. Branch keys AND
+      values must be step UIDs, and must include
+      "finalize": "finalize".
+    • "finalize" has "after" — in orchestrator workflows, the
+      finalize step must have NO "after" dependency. The
+      orchestrator routes to finalize internally via branches.
+    • $ref: in plan node values — plan "node" fields must use
+      bare resource IDs, not "$ref:<id>".
+
+  UI renders nodes as red boxes:
+    • Built-in nodes (user_question, final_answer) are missing
+      one of: rid, name, type, or config. All four are required.
+      Config must include "retries": 1 and the type field.
+
+  "Too many start nodes" validation error:
+    • Agent steps that are branch targets should have NO "after".
+      They appear as start nodes only if they aren't listed in
+      any orchestrator's branches.
+
+  Validation passes but workflow fails at runtime:
+    • validate_workflow only checks resource availability, not
+      graph structure. Ensure your plan follows the patterns in
+      get_guide("workflow_patterns") exactly.
+
+GRAPH VALIDATION RULES:
+  • Exactly 1 start node (user_input) — steps with no "after"
+    AND not branch targets count as start nodes.
+  • Exactly 1 end node (finalize) — steps with no outgoing edges
+    count as end nodes.
+  • All nodes must be reachable (no orphans).
+  • Orchestrator must have branches + exit_condition.
+  • All branch-target agents must have a return path back to the
+    orchestrator (via the orchestrator's "after" list).
+""",
+
+    "system_prompts": """\
+═══ SYSTEM PROMPT BEST PRACTICES ═══
+
+A great system prompt turns a generic LLM into a focused expert.
+
+─── STRUCTURE ───
+  1. ROLE — Who is this agent? Be specific.
+     ✗ "You are a helpful assistant"
+     ✓ "You are a Jira Cloud Expert Agent that manages tickets
+        with surgical precision"
+
+  2. CAPABILITIES — What tools/data does it have?
+     "You have access to Confluence via MCP tools. Use
+     document_retrieval to search pages and spaces."
+
+  3. INSTRUCTIONS — How should it behave?
+     "Always search before creating. Present existing tickets
+     before making duplicates."
+
+  4. RESPONSE FORMAT — How to structure output.
+     "Use markdown tables for lists. Cite sources with
+     [Page Title](URL). Provide a TL;DR for long answers."
+
+  5. CONSTRAINTS — What NOT to do.
+     "Never guess deadlines. Never expose API keys or PII.
+     If data is missing, say so clearly."
+
+  6. EXAMPLES (optional) — Show the expected interaction.
+     "User: Create a bug for login crash
+      You: First, I'll search for existing bugs..."
+
+─── TIPS ───
+  • Shorter is often better. 200-500 words is the sweet spot.
+  • Use markdown headers (##) to organize sections.
+  • Include specific tool names the agent should use.
+  • Define fallback behavior: what to say when data isn't found.
+  • Set the tone: "professional teammate" vs "concise engineer"
+
+─── ANTI-PATTERNS ───
+  ✗ Repeating what the LLM already knows ("You are an AI...")
+  ✗ Vague instructions ("Be helpful and accurate")
+  ✗ Overly long prompts (>1000 words) — diminishing returns
+  ✗ Contradictory rules ("Always be brief" + "Explain everything")
+""",
+}
+
+_GUIDE_TOPICS = ", ".join(sorted(_GUIDES.keys()))
+
+
+@mcp.tool()
+async def get_guide(topic: str = "quick_start") -> str:
+    """Get a detailed guide on a UnifAI topic.
+
+    Returns step-by-step playbooks, decision matrices, and best
+    practices for building agents and workflows.
+
+    Available topics: quick_start, workflow_patterns, llm_selection,
+    resource_types, build_agent, build_workflow, system_prompts
+
+    Args:
+        topic: The guide topic (default: quick_start).
+    """
+    content = _GUIDES.get(topic.lower().strip())
+    if content:
+        return content
+    return (
+        f"Unknown topic: '{topic}'\n\n"
+        f"Available topics: {_GUIDE_TOPICS}\n\n"
+        "Call get_guide with one of these topics for detailed guidance."
+    )
 
 
 @mcp.tool()
@@ -973,6 +1759,52 @@ async def get_resource_details(
 # ── Workflow Management Tools ────────────────────────────────
 
 
+_REF_PREFIX = "$ref:"
+
+
+async def _enrich_draft_refs(
+    draft: dict,
+    unifai: "UnifAIClient",
+) -> dict:
+    """Populate missing ``name`` and ``type`` on ``$ref:`` resources.
+
+    The validate endpoint requires every resource entry to have string
+    ``name`` and ``type`` fields, but callers typically only supply a
+    ``rid``.  This helper resolves each ``$ref:`` to fill in the gaps
+    so both validate and create behave consistently.
+    """
+    resource_sections = ("nodes", "llms", "tools", "providers", "retrievers", "conditions")
+    refs_to_resolve: dict[str, list[dict]] = {}
+
+    for section in resource_sections:
+        for entry in draft.get(section, []):
+            rid = entry.get("rid", "")
+            if rid.startswith(_REF_PREFIX) and (not entry.get("name") or not entry.get("type")):
+                raw_id = rid[len(_REF_PREFIX):]
+                refs_to_resolve.setdefault(raw_id, []).append(entry)
+
+    if not refs_to_resolve:
+        return draft
+
+    async def _fetch_meta(raw_id: str) -> tuple[str, str, str]:
+        try:
+            doc = await unifai.get_resource(raw_id)
+            return raw_id, doc.get("name", ""), doc.get("type", "")
+        except Exception:
+            return raw_id, "", ""
+
+    results = await asyncio.gather(*[_fetch_meta(rid) for rid in refs_to_resolve])
+
+    for raw_id, name, rtype in results:
+        for entry in refs_to_resolve.get(raw_id, []):
+            if not entry.get("name") and name:
+                entry["name"] = name
+            if not entry.get("type") and rtype:
+                entry["type"] = rtype
+
+    return draft
+
+
 @mcp.tool()
 async def get_workflow_schema(ctx: Context) -> str:
     """Get the JSON schema for workflow drafts.
@@ -1025,6 +1857,8 @@ async def create_workflow(
     except json.JSONDecodeError as exc:
         return f"Invalid JSON in workflow: {exc}"
 
+    await _enrich_draft_refs(draft, unifai)
+
     metadata: dict[str, Any] = {}
     if title:
         metadata["title"] = title
@@ -1072,6 +1906,8 @@ async def update_workflow(
     except json.JSONDecodeError as exc:
         return f"Invalid JSON in workflow: {exc}"
 
+    await _enrich_draft_refs(draft, unifai)
+
     try:
         result = await unifai.update_blueprint(
             blueprint_id=workflow_id,
@@ -1099,6 +1935,13 @@ async def validate_workflow(
 
     Use this to check a workflow for errors before calling create_workflow.
 
+    IMPORTANT: This validates resource availability (whether referenced
+    resources exist and are reachable). It does NOT validate graph
+    structure (orphan nodes, required start/end nodes, orchestrator
+    branches, cycle detection). Graph validation is performed by the
+    UI canvas. Always ensure your workflow follows the correct pattern
+    from get_guide("workflow_patterns") before saving.
+
     Args:
         workflow_json: JSON string with the workflow draft to validate.
     """
@@ -1111,24 +1954,77 @@ async def validate_workflow(
     except json.JSONDecodeError as exc:
         return f"Invalid JSON in workflow: {exc}"
 
+    await _enrich_draft_refs(draft, unifai)
+
     try:
-        result = await unifai.validate_blueprint_draft(draft)
+        result = await unifai.validate_blueprint_draft(draft, timeout_seconds=30.0)
     except Exception as exc:
         logger.exception("Failed to validate workflow")
         return f"Failed to validate workflow: {exc}"
 
     is_valid = result.get("is_valid", False)
-    lines = [f"Validation result: {'VALID' if is_valid else 'INVALID'}"]
-
     element_results = result.get("element_results", {})
-    if element_results:
-        for rid, er in element_results.items():
-            status = "OK" if er.get("is_valid") else "FAIL"
-            line = f"  [{status}] {rid}"
-            error = er.get("error", "")
-            if error:
-                line += f" — {error}"
-            lines.append(line)
+
+    ok_items: list[str] = []
+    fail_items: list[str] = []
+
+    for rid, er in element_results.items():
+        name = er.get("name") or rid
+        el_type = er.get("element_type", "")
+        label = f"{name} ({el_type})" if el_type else name
+
+        msgs = er.get("messages", [])
+        detail_parts: list[str] = []
+        for msg in msgs:
+            msg_text = msg.get("message", "") if isinstance(msg, dict) else str(msg)
+            if msg_text:
+                detail_parts.append(msg_text)
+
+        if er.get("is_valid"):
+            ok_items.append(f"  [OK] {label}")
+        else:
+            reason = detail_parts[0] if detail_parts else "unknown error"
+            line = f"  [FAIL] {label}\n         Reason: {reason}"
+
+            dep_results = er.get("dependency_results", {})
+            failed_deps = [
+                dep_name for dep_name, dep_r in dep_results.items()
+                if not dep_r.get("is_valid")
+            ] if isinstance(dep_results, dict) else []
+            if failed_deps:
+                line += f"\n         Failed dependencies: {', '.join(failed_deps)}"
+
+            for extra in detail_parts[1:]:
+                line += f"\n         {extra}"
+
+            fail_items.append(line)
+
+    lines: list[str] = []
+    if is_valid:
+        lines.append(f"Validation result: VALID ({len(ok_items)} resources checked)")
+    else:
+        lines.append(
+            f"Validation result: INVALID "
+            f"({len(fail_items)} failed, {len(ok_items)} passed)"
+        )
+
+    if fail_items:
+        lines.append("\nFailed resources:")
+        lines.extend(fail_items)
+
+    if ok_items:
+        lines.append("\nPassed resources:")
+        lines.extend(ok_items)
+
+    if not is_valid:
+        lines.append(
+            "\n---"
+            "\nNote: Some providers (e.g. Google, GitHub) may fail validation "
+            "due to backend connectivity checks that don't fully support "
+            "draft-mode credential resolution. If these providers work at "
+            "runtime (when you chat with the workflow), these failures can "
+            "be safely ignored."
+        )
 
     return "\n".join(lines)
 
@@ -1214,6 +2110,13 @@ async def get_workflow_details(
             if after:
                 deps = after if isinstance(after, list) else [after]
                 line += f"  (after: {', '.join(deps)})"
+            exit_cond = step.get("exit_condition")
+            if exit_cond:
+                line += f"  (exit_condition: {exit_cond})"
+            branches = step.get("branches")
+            if branches:
+                branch_list = ", ".join(f"{k}→{v}" for k, v in branches.items())
+                line += f"  (branches: {branch_list})"
             lines.append(line)
 
     return "\n".join(lines)

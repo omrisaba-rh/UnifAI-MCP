@@ -1,5 +1,33 @@
 # UnifAI MCP Improvements
 
+## v0.4.0 — Guided User Experience (2026-07-09)
+
+### New: Interactive Guidance System
+
+A layered system designed for cross-client compatibility (Cursor, Claude Code, etc.):
+
+**Layer 1 — Enhanced Server Instructions** (works in every MCP client):
+- UX directives embedded in the `FastMCP()` instructions parameter
+- Rules: always offer 2-3 options, discover before building, explain trade-offs, validate before saving
+- Quick reference for key concepts, workflow patterns, and available guides
+
+**Layer 2 — `get_guide` Tool** (works in every MCP client):
+- 7 detailed playbooks: `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts`
+- Each guide includes step-by-step instructions, decision matrices, examples, tips, and anti-patterns
+- Designed to walk new users from zero to a working workflow
+
+**Layer 3 — Cursor Rule** (Cursor-specific bonus):
+- `.cursor/rules/unifai-guide.mdc` provides persistent Cursor-specific guidance
+- Covers first contact, building resources/workflows, and new user experience
+
+### Improved: Auto-Enrichment of `$ref` Entries
+
+- `create_workflow`, `update_workflow`, and `validate_workflow` now auto-populate missing `name` and `type` fields for `$ref` resources
+- Prevents Pydantic validation errors from the backend
+- Fetches metadata in parallel for referenced resources
+
+---
+
 ## v0.3.0 — Resource & Workflow Management (2026-07-09)
 
 ### New: Resource Management Tools
@@ -19,9 +47,9 @@ The `get_resource_details` tool fetches all referenced resources in parallel and
 Renamed and expanded the blueprint management tools:
 
 - `get_workflow_schema` — JSON schema for composing workflow drafts
-- `create_workflow` — create workflows from JSON drafts
-- `update_workflow` — update existing workflows in-place
-- `validate_workflow` — dry-run validation before saving
+- `create_workflow` — create workflows from JSON drafts (auto-enriches `$ref` entries)
+- `update_workflow` — update existing workflows in-place (auto-enriches `$ref` entries)
+- `validate_workflow` — dry-run validation before saving (auto-enriches `$ref` entries)
 - `delete_workflow` — remove workflows
 - `get_workflow_details` — full workflow definition with nodes and execution plan
 

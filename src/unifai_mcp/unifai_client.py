@@ -456,14 +456,22 @@ class UnifAIClient:
     async def validate_blueprint_draft(
         self,
         draft_dict: dict[str, Any],
+        timeout_seconds: float = 30.0,
     ) -> dict[str, Any]:
         """Validate a blueprint draft without saving it."""
         import json as _json
         resp = await self._http.post(
             "/blueprints/draft.validate",
-            json={"draft": _json.dumps(draft_dict)},
+            json={
+                "draft": _json.dumps(draft_dict),
+                "timeoutSeconds": timeout_seconds,
+            },
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            body = resp.text
+            raise RuntimeError(
+                f"Validation API returned {resp.status_code}: {body}"
+            )
         return self._parse_json(resp)
 
     # ── Helpers ─────────────────────────────────────────────────
