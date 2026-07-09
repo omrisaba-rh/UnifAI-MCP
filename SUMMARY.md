@@ -31,7 +31,7 @@ The UnifAI MCP server exposes the UnifAI multi-agent workflow orchestration plat
 - `get_workflow_schema` — JSON schema for workflow drafts
 - `create_workflow` — create new workflows (auto-enriches `$ref` entries)
 - `update_workflow` — modify existing workflows (auto-enriches `$ref` entries)
-- `validate_workflow` — validate drafts before saving (auto-enriches `$ref` entries)
+- `validate_workflow` — validate drafts before saving with grouped pass/fail output, reasons, and dependency chains (30s timeout, auto-enriches `$ref` entries)
 - `delete_workflow` — remove workflows
 
 ## Architecture

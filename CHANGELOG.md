@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All user-facing output now uses "workflow" terminology instead of "blueprint"
 - Server instructions completely rewritten with UX guidelines, key concepts, and workflow pattern reference
 
+### Improved
+- **`validate_workflow` output**: Failed and passed resources are now grouped separately with clear summary counts (e.g. "INVALID — 4 failed, 9 passed"). Each failure shows the reason, element type, and dependency chain. Includes an informational note about known backend limitations with OAuth-based providers
+- **Validation timeout**: Increased from 10s (backend default) to 30s to give MCP provider connectivity probes sufficient time
+- **Error transparency**: API errors now surface the actual backend error body instead of a generic HTTP status message
+
 ## [0.2.0] - 2026-06-29
 
 ### Added

@@ -1,6 +1,6 @@
 # UnifAI MCP Improvements
 
-## v0.4.0 — Guided User Experience (2026-07-09)
+## v0.4.0 — Guided User Experience & Validation UX (2026-07-09)
 
 ### New: Interactive Guidance System
 
@@ -25,6 +25,18 @@ A layered system designed for cross-client compatibility (Cursor, Claude Code, e
 - `create_workflow`, `update_workflow`, and `validate_workflow` now auto-populate missing `name` and `type` fields for `$ref` resources
 - Prevents Pydantic validation errors from the backend
 - Fetches metadata in parallel for referenced resources
+
+### Improved: Workflow Validation UX
+
+**User-friendly output** — the `validate_workflow` tool now produces structured, actionable results:
+- Summary line with counts: `VALID (13 resources checked)` or `INVALID (4 failed, 9 passed)`
+- Failed resources listed first with reason, element type, and dependency chain
+- Passed resources grouped separately so failures aren't buried in noise
+- Informational note when failures are likely due to known backend limitations (OAuth providers in draft mode)
+
+**Better timeout handling** — validation now sends `timeoutSeconds=30` to the backend (up from the default 10s), giving MCP provider connectivity probes adequate time to complete.
+
+**Transparent errors** — API errors now surface the actual backend error body instead of a generic HTTP status message, making it easier to diagnose issues.
 
 ---
 

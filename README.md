@@ -57,7 +57,7 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 | `get_workflow_schema` | Get the JSON schema for composing workflow drafts |
 | `create_workflow` | Create a new workflow from a JSON draft |
 | `update_workflow` | Update an existing workflow in-place |
-| `validate_workflow` | Validate a workflow draft without saving it |
+| `validate_workflow` | Validate a workflow draft — grouped pass/fail results with reasons, element types, and dependency chains |
 | `delete_workflow` | Delete a workflow |
 
 ## How Workflow Routing Works
