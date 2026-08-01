@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Team workspace support**: Optional `team` parameter on `list_workflows` and `run_workflow` resolves team name/ID via the Identity Service, lists team workflows, and creates sessions under the team workspace (visible in the team UI)
+- **Native HTTPS**: Uvicorn TLS termination when `SSL_CERTFILE` and `SSL_KEYFILE` are set
 - **`get_guide` tool**: Interactive guidance system with 7 topics — `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts`
 - **Enhanced server instructions**: UX directives for LLM clients — always offer 2-3 options, discover before building, explain trade-offs, validate before saving
 - **Cursor rule** (`.cursor/rules/unifai-guide.mdc`): Persistent Cursor-specific guidance for working with UnifAI
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Renamed all "blueprint" tools to "workflow"** for consistency (e.g. `create_blueprint` → `create_workflow`, `get_blueprint_details` → `get_workflow_details`)
 - All user-facing output now uses "workflow" terminology instead of "blueprint"
 - Server instructions completely rewritten with UX guidelines, key concepts, and workflow pattern reference
+- Server instructions and Cursor rule now direct clients to pass `team=` when the user asks for a team workflow
+- Blueprint listing prefers the summary API endpoint, with fallback to the resolved endpoint
 
 ### Improved
 - **`validate_workflow` output**: Failed and passed resources are now grouped separately with clear summary counts (e.g. "INVALID — 4 failed, 9 passed"). Each failure shows the reason, element type, and dependency chain. Includes an informational note about known backend limitations with OAuth-based providers

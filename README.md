@@ -14,9 +14,11 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 - **Workflow lifecycle** — create, validate, update, and delete workflows with schema introspection
 - **Built-in guidance system** — interactive guides for new users covering quick start, workflow patterns, LLM selection, resource types, agent building, and system prompt best practices
 - **Smart UX directives** — the server instructs LLM clients to always offer 2-3 options, discover before building, explain trade-offs, and validate before saving
+- **Team workspace support** — list and run workflows under a team (e.g. UIE Agent) so sessions appear in the team UI
 - **Timeout protection** — workflows automatically timeout after 5 minutes to prevent indefinite waiting
 - **Progress reporting** — real-time updates with elapsed time during workflow execution
-- **Secure by default** — SSL verification enabled by default (configurable for dev environments)
+- **Native HTTPS** — optional TLS via `SSL_CERTFILE` / `SSL_KEYFILE` (Uvicorn serves HTTPS when both are set)
+- **Secure by default** — outbound SSL verification enabled by default (configurable for dev environments)
 
 ## Tools
 
@@ -31,8 +33,8 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 
 | Tool | Description |
 |------|-------------|
-| `list_workflows` | List all available workflows with full details |
-| `run_workflow` | Run a UnifAI workflow by name or ID with a user prompt |
+| `list_workflows` | List available workflows (personal, or pass `team` for a team workspace) |
+| `run_workflow` | Run a UnifAI workflow by name or ID; optional `team` creates the session under that team |
 | `get_session_chat` | Retrieve the chat history and output of a previous workflow session |
 | `list_sessions` | List recent workflow sessions with titles, timestamps, and workflow info |
 | `list_recent_5_sessions` | Quick access to the 5 most recent sessions |
@@ -137,6 +139,8 @@ python -m unifai_mcp.server
 
 The server starts on `http://127.0.0.1:13456` with the MCP endpoint at `/mcp`.
 
+To serve HTTPS locally, set `SSL_CERTFILE` and `SSL_KEYFILE` (and use an `https://` `MCP_SERVER_URL`). Self-signed certs must be trusted by the MCP client (system CA / NSS) or the client will report `ERR_CERT_AUTHORITY_INVALID`.
+
 ### 4. Connect from an MCP Client
 
 Add this to your MCP client config (e.g. Cursor `~/.cursor/mcp.json`):
@@ -150,6 +154,8 @@ Add this to your MCP client config (e.g. Cursor `~/.cursor/mcp.json`):
   }
 }
 ```
+
+For HTTPS, point `url` at your TLS endpoint (e.g. `https://<host>:13500/mcp`).
 
 On first connection the client will:
 1. Discover the AS via `/.well-known/oauth-protected-resource`
@@ -169,7 +175,9 @@ All settings are read from environment variables or a `.env` file:
 | `SSO_URL` | *(staging URL)* | UnifAI Identity Service URL (handles Keycloak SSO) |
 | `UNIFAI_BASE_URL` | *(staging URL)* | UnifAI deployment URL |
 | `UNIFAI_API_PREFIX` | `/api2` | API path prefix on the UnifAI deployment |
-| `VERIFY_SSL` | `true` | Enable SSL certificate verification (set to `false` only for dev/testing with self-signed certs) |
+| `VERIFY_SSL` | `true` | Enable outbound SSL certificate verification (set to `false` only for dev/testing with self-signed certs) |
+| `SSL_CERTFILE` | *(unset)* | Path to TLS certificate (or full chain) PEM — enables HTTPS when set with `SSL_KEYFILE` |
+| `SSL_KEYFILE` | *(unset)* | Path to TLS private key PEM |
 
 ## Project Structure
 

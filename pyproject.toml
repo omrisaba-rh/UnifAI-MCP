@@ -1,6 +1,6 @@
 [project]
 name = "unifai-mcp"
-version = "0.1.0"
+version = "0.5.0"
 description = "MCP server for UnifAI multi-agent workflows with Red Hat SSO authentication"
 requires-python = ">=3.11"
 license = "Apache-2.0"

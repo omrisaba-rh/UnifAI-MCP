@@ -1,5 +1,23 @@
 # UnifAI MCP Improvements
 
+## v0.5.0 — Team Workspaces & Native HTTPS (2026-08-01)
+
+### New: Team Workspace Support
+
+`list_workflows` and `run_workflow` accept an optional `team` argument (name or ID):
+
+- Resolves the team via the UnifAI Identity Service (`/api/teams/teams.list`)
+- Lists workflows from the team workspace (`identityType=team`)
+- Creates sessions under that team so they appear in the team UI
+- Server instructions and Cursor rule tell clients to pass `team=` for team requests (e.g. "UIE Agent")
+
+### New: Native HTTPS
+
+- When `SSL_CERTFILE` and `SSL_KEYFILE` are set, Uvicorn serves the MCP endpoint over HTTPS
+- `.env.example` documents the TLS variables; README covers client trust for self-signed certs
+
+---
+
 ## v0.4.0 — Guided User Experience & Validation UX (2026-07-09)
 
 ### New: Interactive Guidance System
