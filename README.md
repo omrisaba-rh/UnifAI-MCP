@@ -1,9 +1,18 @@
 # UnifAI MCP Server
 
-MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) — run multi-agent AI workflows from any MCP client (Cursor, Claude Desktop, etc.) with Red Hat SSO authentication.
+MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) — run multi-agent AI workflows from any MCP client (Cursor, Claude Desktop, Claude Code, VS Code Copilot, and others) with Red Hat SSO authentication.
+
+## Client-agnostic by design
+
+This server is **MCP-first and client-agnostic**. It must work the same way no matter which host tool connects to it.
+
+- **All capabilities come from the MCP server itself** — tools, tool descriptions, server instructions, and the `get_guide` playbooks. Hosts only need a standard MCP connection (URL + OAuth).
+- **Do not depend on Cursor-specific (or any host-specific) config** for core behavior. Optional local IDE rules or snippets may exist for convenience, but they are never required and must not be the source of truth for routing, UX, auth, or workflow features.
+- **New features belong in the MCP surface** (tools / instructions / guides), so every MCP client gets them automatically.
 
 ## Features
 
+- **Client-agnostic MCP surface** — tools + server instructions carry full product behavior; no host-specific config required
 - **OAuth 2.1 with Red Hat SSO** — authentication via the UnifAI Identity Service (Keycloak proxy), with in-memory token management
 - **Streamable HTTP transport** — production-ready `/mcp` endpoint
 - **Dynamic Client Registration** — MCP clients self-register locally (no Keycloak redirect-URI allowlist needed)
@@ -12,8 +21,8 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 - **Smart caching** — workflow data cached for 5 minutes to reduce API calls and improve performance
 - **Full resource management** — create, read, update, and delete resources (agents, LLMs, tools, providers, retrievers)
 - **Workflow lifecycle** — create, validate, update, and delete workflows with schema introspection
-- **Built-in guidance system** — interactive guides for new users covering quick start, workflow patterns, LLM selection, resource types, agent building, and system prompt best practices
-- **Smart UX directives** — the server instructs LLM clients to always offer 2-3 options, discover before building, explain trade-offs, and validate before saving
+- **Built-in guidance system** — interactive `get_guide` playbooks for new users (quick start, workflow patterns, LLM selection, resource types, agent building, system prompts)
+- **Smart UX directives** — delivered via MCP server instructions so any client LLM follows the same rules (offer choices, discover before building, validate before saving, etc.)
 - **Team workspace support** — list and run workflows under a team (e.g. UIE Agent) so sessions appear in the team UI
 - **Timeout protection** — workflows automatically timeout after 5 minutes to prevent indefinite waiting
 - **Progress reporting** — real-time updates with elapsed time during workflow execution
@@ -64,7 +73,7 @@ MCP server for [UnifAI](https://github.com/redhat-community-ai-tools/UnifAI) —
 
 ## How Workflow Routing Works
 
-When `authenticate` is called at conversation start, the server fetches both recent sessions and available workflows concurrently. The workflow list is returned with curated routing hints (defined in `WORKFLOW_HINTS`) that tell the LLM **when** to use each workflow:
+Routing is entirely MCP-driven (no host-specific rules required). When `authenticate` is called at conversation start, the server fetches both recent sessions and available workflows concurrently. The workflow list is returned with curated routing hints (defined in `WORKFLOW_HINTS`) that tell the client LLM **when** to use each workflow:
 
 ```
 • AskRH — Red Hat product knowledge (RHEL, OpenShift, Ansible, security, lifecycle)

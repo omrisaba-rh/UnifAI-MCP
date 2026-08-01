@@ -118,6 +118,12 @@ MCP server for UnifAI — a multi-agent workflow orchestration platform.
 Authenticate with your Red Hat SSO credentials, then run AI workflows
 by workflow name or ID.
 
+═══ CLIENT-AGNOSTIC ═══
+This MCP server is host-agnostic (Cursor, Claude Desktop, Claude Code,
+VS Code, or any other MCP client). All capabilities — tools, routing
+hints, UX rules, and guides — come from this server. Do not rely on
+host-specific rules or config for UnifAI behavior.
+
 ═══ STARTUP ═══
 Always call 'authenticate' FIRST at the start of every conversation.
 Present only the recent sessions to the user and ask if they'd like to

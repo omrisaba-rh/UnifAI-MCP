@@ -2,6 +2,14 @@
 
 ## v0.5.0 — Team Workspaces & Native HTTPS (2026-08-01)
 
+### Design principle: Client-agnostic MCP
+
+UnifAI MCP is host-agnostic. Cursor, Claude Desktop, Claude Code, VS Code, and any other MCP client must get the same capabilities from the server alone:
+
+- Tools, tool descriptions, and FastMCP server instructions are the source of truth
+- Optional host-local rules (e.g. `.cursor/rules/`) are never required and must not own core behavior
+- New features are added to the MCP surface so every client benefits automatically
+
 ### New: Team Workspace Support
 
 `list_workflows` and `run_workflow` accept an optional `team` argument (name or ID):
@@ -9,7 +17,7 @@
 - Resolves the team via the UnifAI Identity Service (`/api/teams/teams.list`)
 - Lists workflows from the team workspace (`identityType=team`)
 - Creates sessions under that team so they appear in the team UI
-- Server instructions and Cursor rule tell clients to pass `team=` for team requests (e.g. "UIE Agent")
+- Server instructions tell *any* MCP client to pass `team=` for team requests (e.g. "UIE Agent")
 
 ### New: Native HTTPS
 
@@ -22,21 +30,21 @@
 
 ### New: Interactive Guidance System
 
-A layered system designed for cross-client compatibility (Cursor, Claude Code, etc.):
+Guidance is MCP-native so every client gets it without host-specific setup:
 
-**Layer 1 — Enhanced Server Instructions** (works in every MCP client):
+**Layer 1 — Server Instructions** (every MCP client):
 - UX directives embedded in the `FastMCP()` instructions parameter
 - Rules: always offer 2-3 options, discover before building, explain trade-offs, validate before saving
 - Quick reference for key concepts, workflow patterns, and available guides
 
-**Layer 2 — `get_guide` Tool** (works in every MCP client):
+**Layer 2 — `get_guide` Tool** (every MCP client):
 - 7 detailed playbooks: `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts`
 - Each guide includes step-by-step instructions, decision matrices, examples, tips, and anti-patterns
 - Designed to walk new users from zero to a working workflow
 
-**Layer 3 — Cursor Rule** (Cursor-specific bonus):
-- `.cursor/rules/unifai-guide.mdc` provides persistent Cursor-specific guidance
-- Covers first contact, building resources/workflows, and new user experience
+**Optional — Host-local rules** (never required):
+- e.g. `.cursor/rules/unifai-guide.mdc` may mirror MCP instructions for convenience in one IDE
+- Must not introduce capabilities that other MCP clients lack
 
 ### Improved: Auto-Enrichment of `$ref` Entries
 

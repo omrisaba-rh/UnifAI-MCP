@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Renamed all "blueprint" tools to "workflow"** for consistency (e.g. `create_blueprint` → `create_workflow`, `get_blueprint_details` → `get_workflow_details`)
 - All user-facing output now uses "workflow" terminology instead of "blueprint"
 - Server instructions completely rewritten with UX guidelines, key concepts, and workflow pattern reference
-- Server instructions and Cursor rule now direct clients to pass `team=` when the user asks for a team workflow
+- Documented **client-agnostic** design: all capabilities ship via MCP tools/instructions/guides; host-specific config is never required
+- Server instructions direct clients to pass `team=` when the user asks for a team workflow
 - Blueprint listing prefers the summary API endpoint, with fallback to the resolved endpoint
 
 ### Improved

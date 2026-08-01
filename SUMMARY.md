@@ -40,14 +40,15 @@ The UnifAI MCP server exposes the UnifAI multi-agent workflow orchestration plat
 - **Auth**: OAuth 2.1 with Red Hat SSO via UnifAI Identity Service
 - **Client**: Async HTTP client (`unifai_client.py`) with caching (5-min TTL); Identity Service used for team listing
 - **Security**: Outbound SSL verification enabled by default
-- **Guidance**: Layered system — server instructions (cross-client), `get_guide` tool (cross-client), Cursor rule (Cursor-specific)
+- **Guidance**: MCP-native — server instructions + `get_guide` (all clients). Optional host-local rules must never be required.
 
 ## Key Design Decisions
 
+- **Client-agnostic**: The MCP must not depend on Cursor (or any host) specific config. Every capability ships as MCP tools, tool descriptions, and server instructions so any MCP client gets full behavior.
 - All "blueprint" terminology in user-facing tools has been replaced with "workflow" for clarity
 - The `get_resource_details` tool resolves `$ref` resource IDs to their names for readability
 - Internal client methods and API endpoints still use "blueprint" since that's the backend API contract
 - Team ownership is set at session create time (`teamId`); `list_workflows` / `run_workflow` accept a `team` name or ID and resolve it via the Identity Service
 - In-memory auth state (no disk persistence) — restarts require re-authentication
-- The guidance system is designed for cross-client compatibility: server instructions and `get_guide` work in any MCP client (Cursor, Claude Code, etc.), while the `.cursor/rules/` file adds Cursor-specific enhancements
+- Host-local files (e.g. `.cursor/rules/`) are optional convenience only; they must duplicate—not replace—MCP instructions
 - `create_workflow`, `update_workflow`, and `validate_workflow` auto-enrich `$ref` entries with `name` and `type` to prevent backend validation errors
