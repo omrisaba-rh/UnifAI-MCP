@@ -93,7 +93,11 @@ async def _auth_sweep_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_server: FastMCP) -> AsyncIterator[dict]:
-    client = UnifAIClient(settings.unifai_api_url, verify_ssl=settings.verify_ssl)
+    client = UnifAIClient(
+        settings.unifai_api_url,
+        verify_ssl=settings.verify_ssl,
+        identity_base_url=settings.sso_url,
+    )
     if not settings.verify_ssl:
         logger.warning(
             "SSL verification is DISABLED. This should only be used in "
@@ -119,6 +123,9 @@ Always call 'authenticate' FIRST at the start of every conversation.
 Present only the recent sessions to the user and ask if they'd like to
 continue or start something new. Do NOT list the available workflows —
 use them silently when deciding which workflow to invoke via run_workflow.
+When the user asks to run a team workflow (e.g. "UIE Agent"), pass
+team="<team name>" to both list_workflows and run_workflow so the
+session is created under that team workspace — not personal.
 
 ═══ USER EXPERIENCE GUIDELINES ═══
 You are a helpful UnifAI assistant. Follow these rules to provide
@@ -256,6 +263,60 @@ def _require_auth() -> tuple[str, str]:
             "Session cookie missing. Please re-authenticate."
         )
     return session_cookie, username
+
+
+async def _resolve_team(
+    unifai: UnifAIClient,
+    username: str,
+    team: str,
+) -> tuple[str, str] | str:
+    """Resolve a team name/id to ``(team_id, display_name)``.
+
+    Returns an error string if the team cannot be resolved.
+    """
+    try:
+        teams = await unifai.list_teams(username)
+    except Exception as exc:
+        logger.exception("Failed to list teams")
+        return f"Failed to list teams: {exc}"
+
+    needle = team.strip().lower()
+    match = next(
+        (
+            t for t in teams
+            if needle in {
+                str(t.get("name", "")).lower(),
+                str(t.get("team_id", "")).lower(),
+                str(t.get("id", "")).lower(),
+            }
+            or needle == str(t.get("name", "")).lower()
+        ),
+        None,
+    )
+    if not match:
+        # Allow partial name match (e.g. "uie" → "UIE Agents")
+        match = next(
+            (
+                t for t in teams
+                if needle in str(t.get("name", "")).lower()
+                or needle in str(t.get("team_id", "")).lower()
+            ),
+            None,
+        )
+    if not match:
+        available = ", ".join(
+            t.get("name") or t.get("team_id") or "?" for t in teams
+        ) or "(none)"
+        return (
+            f"Team not found: {team!r}.\n"
+            f"Your teams: {available}"
+        )
+
+    team_id = match.get("team_id") or match.get("id") or ""
+    display_name = match.get("name") or team_id
+    if not team_id:
+        return f"Team {team!r} has no id."
+    return team_id, display_name
 
 
 # ── Tools ───────────────────────────────────────────────────────
@@ -1123,27 +1184,67 @@ async def get_guide(topic: str = "quick_start") -> str:
 
 
 @mcp.tool()
-async def list_workflows(ctx: Context) -> str:
-    """List all available UnifAI workflows for the current user."""
+async def list_workflows(
+    ctx: Context,
+    team: str | None = None,
+) -> str:
+    """List available UnifAI workflows for the current user or a team.
+
+    Args:
+        team: Optional team name or team ID (e.g. "UIE Agent").
+              When omitted, lists the user's personal workflows.
+    """
     session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
     unifai.set_session_cookie(session_cookie)
 
+    identity_type = "user"
+    owner_id = username
+    display_name: str | None = None
+    scope_label = "personal"
+
+    if team:
+        resolved = await _resolve_team(unifai, username, team)
+        if isinstance(resolved, str):
+            return resolved
+        owner_id, display_name = resolved
+        identity_type = "team"
+        scope_label = f"team '{display_name}'"
+
     try:
-        blueprints = await unifai.list_blueprints(username)
+        blueprints = await unifai.list_blueprints(
+            owner_id,
+            identity_type=identity_type,
+            display_name=display_name,
+        )
     except Exception as exc:
         logger.exception("Failed to list blueprints")
-        return "Failed to list workflows. Please try again later."
+        return f"Failed to list workflows for {scope_label}: {exc}"
 
     if not blueprints:
-        return "No workflows available."
+        return f"No workflows available for {scope_label}."
 
-    lines = [f"Available workflows ({len(blueprints)}):\n"]
+    lines = [f"Available workflows for {scope_label} ({len(blueprints)}):\n"]
     for bp in blueprints:
-        spec = bp.get("spec_dict", {})
-        bp_id = bp.get("blueprint_id", "?")
-        bp_name = spec.get("name", "Unnamed")
-        desc = spec.get("description", "")
+        # summary endpoint fields differ slightly from resolved
+        spec = bp.get("spec_dict") or {}
+        bp_id = (
+            bp.get("blueprint_id")
+            or bp.get("id")
+            or spec.get("id")
+            or "?"
+        )
+        bp_name = (
+            bp.get("name")
+            or spec.get("name")
+            or bp.get("title")
+            or "Unnamed"
+        )
+        desc = (
+            bp.get("description")
+            or spec.get("description")
+            or ""
+        )
         line = f"  - {bp_name}  (id: {bp_id})"
         if desc:
             line += f"\n    {desc}"
@@ -1153,9 +1254,10 @@ async def list_workflows(ctx: Context) -> str:
 
 @mcp.tool()
 async def run_workflow(
+    ctx: Context,
     workflow: str,
     prompt: str,
-    ctx: Context,
+    team: str | None = None,
 ) -> str:
     """Run a UnifAI multi-agent workflow.
 
@@ -1163,16 +1265,47 @@ async def run_workflow(
         workflow: Workflow name (e.g. "Multi-Source Knowledge Search")
                   or workflow ID.
         prompt:   The user question or instruction to send to the workflow.
+        team:     Optional team name or team ID (e.g. "UIE Agent").
+                  When set, resolves the workflow from the team workspace and
+                  creates the session under that team (visible in team UI).
+                  When omitted, runs under the user's personal workspace.
     """
     session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
     unifai.set_session_cookie(session_cookie)
 
-    blueprint_id = await _resolve_blueprint(unifai, workflow, username)
+    team_id: str | None = None
+    display_name: str | None = None
+    identity_type = "user"
+    owner_id = username
+    scope_label = "personal"
+
+    if team:
+        resolved = await _resolve_team(unifai, username, team)
+        if isinstance(resolved, str):
+            return resolved
+        team_id, display_name = resolved
+        identity_type = "team"
+        owner_id = team_id
+        scope_label = f"team '{display_name}'"
+
+    blueprint_id = await _resolve_blueprint(
+        unifai,
+        workflow,
+        owner_id,
+        identity_type=identity_type,
+        display_name=display_name,
+    )
 
     try:
-        await ctx.info(f"Creating session for workflow {blueprint_id}...")
-        session_id = await unifai.create_session(blueprint_id)
+        await ctx.info(
+            f"Creating session for workflow {blueprint_id} ({scope_label})..."
+        )
+        session_id = await unifai.create_session(
+            blueprint_id,
+            team_id=team_id,
+            display_name=display_name,
+        )
 
         await ctx.info(f"Submitting workflow (session {session_id})...")
         await unifai.submit_session(
@@ -1250,7 +1383,8 @@ async def run_workflow(
             return (
                 f"Workflow completed.\n"
                 f"Session : {session_id}\n"
-                f"Workflow: {blueprint_id}\n\n"
+                f"Workflow: {blueprint_id}\n"
+                f"Scope   : {scope_label}\n\n"
                 f"Result:\n{output}"
             )
 
@@ -1258,7 +1392,8 @@ async def run_workflow(
         return (
             f"Workflow completed.\n"
             f"Session : {session_id}\n"
-            f"Workflow: {blueprint_id}\n\n"
+            f"Workflow: {blueprint_id}\n"
+            f"Scope   : {scope_label}\n\n"
             f"Result:\n{formatted}"
         )
     except PermissionError:
@@ -1267,7 +1402,8 @@ async def run_workflow(
         logger.exception("Workflow execution failed for blueprint=%s", blueprint_id)
         return (
             f"Workflow execution failed. Please try again.\n"
-            f"Workflow: {blueprint_id}"
+            f"Workflow: {blueprint_id}\n"
+            f"Scope   : {scope_label}"
         )
 
 
@@ -2126,13 +2262,21 @@ async def _resolve_blueprint(
     unifai: UnifAIClient,
     workflow: str,
     user_id: str,
+    identity_type: str = "user",
+    display_name: str | None = None,
 ) -> str:
     """Resolve a user-supplied workflow identifier to a blueprint ID.
 
-    Tries name-based lookup first; falls back to treating the input as
-    a literal ID and letting the backend validate.
+    Tries name-based lookup first (personal or team, based on identity);
+    falls back to treating the input as a literal ID and letting the
+    backend validate.
     """
-    found = await unifai.find_blueprint_by_name(workflow, user_id)
+    found = await unifai.find_blueprint_by_name(
+        workflow,
+        user_id,
+        identity_type=identity_type,
+        display_name=display_name,
+    )
     if found:
         return found
     return workflow
