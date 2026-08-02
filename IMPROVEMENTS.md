@@ -1,225 +1,132 @@
 # UnifAI MCP Improvements
 
-This document describes the improvements made to the UnifAI MCP server.
+## v0.5.0 — Team Workspaces & Native HTTPS (2026-08-01)
 
-## Changes Summary
+### Design principle: Client-agnostic MCP
 
-### 1. Error Handling & Resilience (server.py)
+UnifAI MCP is host-agnostic. Cursor, Claude Desktop, Claude Code, VS Code, and any other MCP client must get the same capabilities from the server alone:
 
-**What changed:**
-- Added configurable timeout mechanism (5 minutes default) to prevent indefinite waiting
-- Added retry logic with better error handling for stream status checks
-- Enhanced error messages with session IDs for manual recovery
-- Added detailed logging for timeout and error scenarios
+- Tools, tool descriptions, and FastMCP server instructions are the source of truth
+- Optional host-local rules (e.g. `.cursor/rules/`) are never required and must not own core behavior
+- New features are added to the MCP surface so every client benefits automatically
 
-**Benefits:**
-- Workflows won't hang indefinitely if they get stuck
-- Users get clear feedback when timeouts occur
-- Better debugging with correlation between errors and sessions
+### New: Team Workspace Support
 
-**Configuration:**
-- `MAX_POLL_DURATION = 300` (5 minutes) - configurable in code
-- `POLL_INTERVAL = 3` (seconds) - configurable in code
+`list_workflows` and `run_workflow` accept an optional `team` argument (name or ID):
 
----
+- Resolves the team via the UnifAI Identity Service (`/api/teams/teams.list`)
+- Lists workflows from the team workspace (`identityType=team`)
+- Creates sessions under that team so they appear in the team UI
+- Server instructions tell *any* MCP client to pass `team=` for team requests (e.g. "UIE Agent")
 
-### 2. Better Progress Reporting (server.py)
+### New: Native HTTPS
 
-**What changed:**
-- Added elapsed time tracking during workflow execution
-- Progress updates every 30 seconds showing elapsed time
-- More informative messages during different phases of execution
-
-**Benefits:**
-- Users have better visibility into long-running workflows
-- Easier to understand if workflows are progressing normally
-- Reduces uncertainty during wait times
-
-**Example output:**
-```
-Workflow running... (30s elapsed)
-Workflow running... (60s elapsed)
-Workflow running... (90s elapsed)
-```
+- When `SSL_CERTFILE` and `SSL_KEYFILE` are set, Uvicorn serves the MCP endpoint over HTTPS
+- `.env.example` documents the TLS variables; README covers client trust for self-signed certs
 
 ---
 
-### 3. Caching & Performance (unifai_client.py)
+## v0.4.0 — Guided User Experience & Validation UX (2026-07-09)
 
-**What changed:**
-- Added in-memory cache for blueprint lookups with 5-minute TTL
-- Cache is keyed per user to avoid conflicts
-- Added `use_cache` parameter to control caching behavior
-- Added `clear_cache()` method for manual cache invalidation
-- Detailed debug logging for cache hits/misses
+### New: Interactive Guidance System
 
-**Benefits:**
-- Reduces API calls to UnifAI backend
-- Faster workflow resolution (name → blueprint ID)
-- Better performance for repeated operations
-- Reduced load on backend services
+Guidance is MCP-native so every client gets it without host-specific setup:
 
-**Configuration:**
-- Default cache TTL: 300 seconds (5 minutes)
-- Configurable via `cache_ttl` parameter in `UnifAIClient` constructor
+**Layer 1 — Server Instructions** (every MCP client):
+- UX directives embedded in the `FastMCP()` instructions parameter
+- Rules: always offer 2-3 options, discover before building, explain trade-offs, validate before saving
+- Quick reference for key concepts, workflow patterns, and available guides
 
-**Usage:**
-```python
-# Use cache (default)
-blueprints = await client.list_blueprints(user_id)
+**Layer 2 — `get_guide` Tool** (every MCP client):
+- 7 detailed playbooks: `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts`
+- Each guide includes step-by-step instructions, decision matrices, examples, tips, and anti-patterns
+- Designed to walk new users from zero to a working workflow
 
-# Bypass cache
-blueprints = await client.list_blueprints(user_id, use_cache=False)
+**Optional — Host-local rules** (never required):
+- e.g. `.cursor/rules/unifai-guide.mdc` may mirror MCP instructions for convenience in one IDE
+- Must not introduce capabilities that other MCP clients lack
 
-# Clear cache manually
-client.clear_cache()
-```
+### Improved: Auto-Enrichment of `$ref` Entries
 
----
+- `create_workflow`, `update_workflow`, and `validate_workflow` now auto-populate missing `name` and `type` fields for `$ref` resources
+- Prevents Pydantic validation errors from the backend
+- Fetches metadata in parallel for referenced resources
 
-### 4. Security Improvements (config.py, server.py, .env.example)
+### Improved: Workflow Validation UX
 
-**What changed:**
-- SSL verification now enabled by default (`VERIFY_SSL=true`)
-- Added `verify_ssl` configuration setting
-- Added warning log when SSL verification is disabled
-- Updated `.env.example` with security documentation
+**User-friendly output** — the `validate_workflow` tool now produces structured, actionable results:
+- Summary line with counts: `VALID (13 resources checked)` or `INVALID (4 failed, 9 passed)`
+- Failed resources listed first with reason, element type, and dependency chain
+- Passed resources grouped separately so failures aren't buried in noise
+- Informational note when failures are likely due to known backend limitations (OAuth providers in draft mode)
 
-**Benefits:**
-- Secure by default - prevents MITM attacks
-- Clear warnings when running in insecure mode
-- Easy to disable for development/testing when needed
+**Better timeout handling** — validation now sends `timeoutSeconds=30` to the backend (up from the default 10s), giving MCP provider connectivity probes adequate time to complete.
 
-**Configuration:**
-```bash
-# In .env file
-VERIFY_SSL=true   # Production (default)
-VERIFY_SSL=false  # Only for dev/testing with self-signed certs
-```
-
-**Warning message when disabled:**
-```
-SSL verification is DISABLED. This should only be used in 
-development/testing environments. Enable VERIFY_SSL=true in production.
-```
+**Transparent errors** — API errors now surface the actual backend error body instead of a generic HTTP status message, making it easier to diagnose issues.
 
 ---
 
-## Testing the Changes
+## v0.3.0 — Resource & Workflow Management (2026-07-09)
 
-### 1. Test Error Handling
-```bash
-# Start the MCP server
-unifai-mcp
+### New: Resource Management Tools
 
-# From an MCP client, run a workflow and observe:
-# - Progress updates every 30 seconds
-# - Timeout after 5 minutes if workflow doesn't complete
-# - Clear error messages if issues occur
-```
+Added full CRUD for UnifAI resources (agents, LLMs, tools, providers, retrievers):
 
-### 2. Test Caching
-```bash
-# First call - fetches from API and caches
-authenticate()  # or list_workflows()
+- `list_resources` — browse with optional category/type filters
+- `get_resource_details` — view full configuration of any resource, with `$ref` IDs resolved to resource names
+- `create_resource` — create new resources using catalog schemas
+- `update_resource` — modify existing resource config or name
+- `delete_resource` — remove resources
 
-# Second call within 5 minutes - uses cache (check logs for "Using cached blueprints")
-list_workflows()
-```
+The `get_resource_details` tool fetches all referenced resources in parallel and annotates both the summary and the configuration JSON with human-readable names.
 
-### 3. Test SSL Configuration
-```bash
-# Test with SSL verification enabled (default)
-VERIFY_SSL=true unifai-mcp
+### New: Workflow Management Tools
 
-# Test with SSL verification disabled (dev only)
-VERIFY_SSL=false unifai-mcp
-# Should see warning: "SSL verification is DISABLED..."
-```
+Renamed and expanded the blueprint management tools:
 
----
+- `get_workflow_schema` — JSON schema for composing workflow drafts
+- `create_workflow` — create workflows from JSON drafts (auto-enriches `$ref` entries)
+- `update_workflow` — update existing workflows in-place (auto-enriches `$ref` entries)
+- `validate_workflow` — dry-run validation before saving (auto-enriches `$ref` entries)
+- `delete_workflow` — remove workflows
+- `get_workflow_details` — full workflow definition with nodes and execution plan
 
-## Migration Guide
+### New: Catalog Tools
 
-### For Users
+- `list_catalog` — discover all available element types by category
+- `get_element_schema` — get the config schema for any element type before creating resources
 
-**No changes required!** All improvements are backward compatible.
+### Renamed: Blueprint → Workflow
 
-Optional: Add `VERIFY_SSL=true` to your `.env` file for explicit SSL configuration.
+All user-facing tool names and output strings now use "workflow" instead of "blueprint":
+- `get_blueprint_details` → `get_workflow_details`
+- `get_blueprint_schema` → `get_workflow_schema`
+- `create_blueprint` → `create_workflow`
+- `update_blueprint` → `update_workflow`
+- `validate_blueprint` → `validate_workflow`
+- `delete_blueprint` → `delete_workflow`
 
-### For Developers
-
-If you're extending the UnifAI client:
-
-1. **Caching:** Blueprint data is now cached. To force a fresh fetch:
-   ```python
-   blueprints = await client.list_blueprints(user_id, use_cache=False)
-   ```
-
-2. **SSL:** To disable SSL in development:
-   ```bash
-   # In .env
-   VERIFY_SSL=false
-   ```
+Internal client methods retain "blueprint" naming since it matches the backend API contract.
 
 ---
 
-## Performance Impact
+## v0.2.0 — Error Handling, Caching & Security (2026-06-29)
 
-### Before Changes
-- Blueprint lookup: ~200-500ms per call
-- No timeout protection
-- No progress visibility for users
+### Error Handling & Resilience
+- 5-minute timeout protection for workflow execution
+- Retry logic for stream status checks
+- Session IDs included in error messages for manual recovery
 
-### After Changes
-- Blueprint lookup (cached): ~1-5ms
-- Blueprint lookup (uncached): ~200-500ms (same as before)
-- Automatic timeout after 5 minutes
+### Progress Reporting
+- Elapsed time tracking during workflow execution
 - Progress updates every 30 seconds
-- Cache hit rate: Expected 80-90% for typical usage patterns
 
----
+### Caching
+- In-memory cache for workflow lookups (5-minute TTL)
+- Per-user cache keys
+- `clear_cache()` method for manual invalidation
 
-## Future Improvements
-
-These changes lay the groundwork for:
-
-1. **Configurable timeouts** - Move hardcoded values to config
-2. **Cache statistics** - Track hit/miss rates
-3. **Health endpoints** - Monitor cache size, connection status
-4. **Metrics** - Export timing and success/failure metrics
-
----
-
-## Files Modified
-
-1. `src/unifai_mcp/server.py`
-   - Enhanced `run_workflow()` with timeout and progress reporting
-   - Updated `lifespan()` to use configurable SSL verification
-
-2. `src/unifai_mcp/unifai_client.py`
-   - Added cache infrastructure
-   - Enhanced `list_blueprints()` with caching
-   - Added `clear_cache()` method
-
-3. `src/unifai_mcp/config.py`
-   - Added `verify_ssl` setting
-
-4. `.env.example`
-   - Added `VERIFY_SSL` configuration with documentation
-
----
-
-## Rollback Instructions
-
-If you need to revert these changes:
-
-```bash
-git revert <commit-hash>
-```
-
-Or manually:
-1. Remove caching logic from `unifai_client.py`
-2. Restore original `run_workflow()` in `server.py`
-3. Remove `verify_ssl` from `config.py`
-4. Set `verify_ssl=False` in `server.py` lifespan function
+### Security
+- SSL verification enabled by default
+- Configurable via `VERIFY_SSL` environment variable
+- Warning log when SSL verification is disabled

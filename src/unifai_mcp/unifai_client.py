@@ -24,8 +24,12 @@ class UnifAIClient:
         timeout: float = 120,
         verify_ssl: bool = True,
         cache_ttl: int = 300,  # 5 minutes default cache TTL
+        identity_base_url: str | None = None,
     ):
         self._base_url = base_url.rstrip("/")
+        self._identity_base_url = (identity_base_url or "").rstrip("/")
+        self._verify_ssl = verify_ssl
+        self._timeout = timeout
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=timeout,
@@ -38,10 +42,36 @@ class UnifAIClient:
         # Cache for user session ID sets: {cache_key: (set_of_ids, timestamp)}
         self._session_cache: dict[str, tuple[set[str], float]] = {}
         self._cache_ttl = cache_ttl
+        self._session_cookie: str = ""
 
     def set_session_cookie(self, session_cookie: str) -> None:
         """Install the pre-signed session cookie for API authentication."""
+        self._session_cookie = session_cookie
         self._http.cookies.set("session", session_cookie)
+
+    # ── Teams (Identity Service) ────────────────────────────────
+
+    async def list_teams(self, user_id: str) -> list[dict[str, Any]]:
+        """List teams the user belongs to (Identity Service)."""
+        if not self._identity_base_url:
+            raise RuntimeError("Identity base URL is not configured")
+        async with httpx.AsyncClient(
+            base_url=self._identity_base_url,
+            timeout=self._timeout,
+            follow_redirects=True,
+            verify=self._verify_ssl,
+            headers={"Accept": "application/json"},
+            cookies={"session": self._session_cookie} if self._session_cookie else None,
+        ) as identity_http:
+            resp = await identity_http.get(
+                "/api/teams/teams.list",
+                params={"userId": user_id},
+            )
+            resp.raise_for_status()
+            data = self._parse_json(resp)
+        if isinstance(data, dict):
+            return data.get("teams") or []
+        return data if isinstance(data, list) else []
 
     # ── Blueprints ──────────────────────────────────────────────
 
@@ -49,17 +79,21 @@ class UnifAIClient:
         self,
         user_id: str,
         use_cache: bool = True,
+        identity_type: str = "user",
+        display_name: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List available blueprints for a user.
+        """List available blueprints for a user or team.
 
         Args:
-            user_id: The user ID to fetch blueprints for
+            user_id: Username (personal) or team id (team workspace)
             use_cache: Whether to use cached results (default: True)
+            identity_type: ``user`` or ``team``
+            display_name: Optional display name (team name) for auth checks
 
         Returns:
             List of blueprint dictionaries
         """
-        cache_key = f"bp_{user_id}"
+        cache_key = f"bp_{identity_type}_{user_id}"
 
         # Check cache if enabled
         if use_cache and cache_key in self._blueprint_cache:
@@ -67,21 +101,33 @@ class UnifAIClient:
             age = time.time() - timestamp
             if age < self._cache_ttl:
                 logger.debug(
-                    "Using cached blueprints for user=%s (age=%.1fs)",
-                    user_id, age
+                    "Using cached blueprints for %s=%s (age=%.1fs)",
+                    identity_type, user_id, age
                 )
                 return cached_data
             else:
                 logger.debug(
-                    "Cache expired for user=%s (age=%.1fs > ttl=%ds)",
-                    user_id, age, self._cache_ttl
+                    "Cache expired for %s=%s (age=%.1fs > ttl=%ds)",
+                    identity_type, user_id, age, self._cache_ttl
                 )
 
-        # Fetch from API
+        params: dict[str, str] = {
+            "userId": user_id,
+            "identityType": identity_type,
+        }
+        if display_name:
+            params["displayName"] = display_name
+
+        # Prefer summary for listing; fall back to resolved if needed
         resp = await self._http.get(
-            "/blueprints/available.blueprints.resolved.get",
-            params={"userId": user_id, "identityType": "user"},
+            "/blueprints/available.blueprints.summary.get",
+            params=params,
         )
+        if resp.status_code == 404:
+            resp = await self._http.get(
+                "/blueprints/available.blueprints.resolved.get",
+                params=params,
+            )
         resp.raise_for_status()
         data = self._parse_json(resp)
 
@@ -93,8 +139,8 @@ class UnifAIClient:
         # Update cache
         self._blueprint_cache[cache_key] = (result, time.time())
         logger.debug(
-            "Cached %d blueprints for user=%s",
-            len(result), user_id
+            "Cached %d blueprints for %s=%s",
+            len(result), identity_type, user_id
         )
 
         return result
@@ -104,22 +150,43 @@ class UnifAIClient:
         name: str,
         user_id: str,
         use_cache: bool = True,
+        identity_type: str = "user",
+        display_name: str | None = None,
     ) -> str | None:
         """Return the blueprint ID whose name matches *name* (case-insensitive).
 
         Args:
             name: Blueprint name to search for
-            user_id: User ID to search blueprints for
+            user_id: Username (personal) or team id (team workspace)
             use_cache: Whether to use cached blueprint list (default: True)
+            identity_type: ``user`` or ``team``
+            display_name: Optional display name (team name) for auth checks
 
         Returns:
             Blueprint ID if found, None otherwise
         """
-        blueprints = await self.list_blueprints(user_id, use_cache=use_cache)
+        blueprints = await self.list_blueprints(
+            user_id,
+            use_cache=use_cache,
+            identity_type=identity_type,
+            display_name=display_name,
+        )
+        needle = name.lower()
         for bp in blueprints:
-            bp_name = bp.get("spec_dict", {}).get("name", "")
-            if bp_name.lower() == name.lower():
-                return bp.get("blueprint_id", "")
+            spec = bp.get("spec_dict") or {}
+            bp_name = (
+                bp.get("name")
+                or spec.get("name")
+                or bp.get("title")
+                or ""
+            )
+            if str(bp_name).lower() == needle:
+                return (
+                    bp.get("blueprint_id")
+                    or bp.get("id")
+                    or spec.get("id")
+                    or ""
+                )
         return None
 
     def _update_session_id_cache(
@@ -179,11 +246,22 @@ class UnifAIClient:
     async def create_session(
         self,
         blueprint_id: str,
+        team_id: str | None = None,
+        display_name: str | None = None,
     ) -> str:
-        """Create a new workflow session and return its session ID."""
+        """Create a new workflow session and return its session ID.
+
+        When *team_id* is set, the session is owned by the team workspace
+        (MAS resolves identity from ``teamId``). Otherwise it is personal.
+        """
+        body: dict[str, Any] = {"blueprintId": blueprint_id}
+        if team_id:
+            body["teamId"] = team_id
+            if display_name:
+                body["displayName"] = display_name
         resp = await self._http.post(
             "/sessions/user.session.create",
-            json={"blueprintId": blueprint_id},
+            json=body,
         )
         resp.raise_for_status()
         data = self._parse_json(resp)
@@ -195,15 +273,21 @@ class UnifAIClient:
         self,
         session_id: str,
         inputs: dict[str, Any],
+        session_type: str = "Personal",
     ) -> dict[str, Any]:
-        """Submit a workflow turn (fire-and-forget), then poll for results."""
+        """Submit a workflow turn (fire-and-forget), then poll for results.
+
+        ``sessionType`` controls busy-state semantics (Personal vs Shared),
+        not workspace ownership. Team ownership is set at create time via
+        ``teamId``.
+        """
         resp = await self._http.post(
             "/sessions/user.session.submit",
             json={
                 "sessionId": session_id,
                 "inputs": inputs,
                 "scope": "public",
-                "sessionType": "Personal",
+                "sessionType": session_type,
             },
         )
         if resp.status_code >= 400:
@@ -260,6 +344,218 @@ class UnifAIClient:
             params={"sessionId": session_id},
         )
         resp.raise_for_status()
+        return self._parse_json(resp)
+
+    # ── Catalog ───────────────────────────────────────────────
+
+    async def list_catalog_categories(self) -> list[str]:
+        """List all available resource categories (llms, tools, providers, …)."""
+        resp = await self._http.get("/catalog/categories.list.get")
+        resp.raise_for_status()
+        data = self._parse_json(resp)
+        return data.get("categories", []) if isinstance(data, dict) else []
+
+    async def list_catalog_elements(self) -> dict[str, list[dict[str, Any]]]:
+        """List all element types grouped by category."""
+        resp = await self._http.get("/catalog/elements.list.get")
+        resp.raise_for_status()
+        data = self._parse_json(resp)
+        return data.get("elements", {}) if isinstance(data, dict) else {}
+
+    async def get_element_spec(
+        self, category: str, element_type: str,
+    ) -> dict[str, Any]:
+        """Get the config schema and details for a specific element type."""
+        resp = await self._http.get(
+            "/catalog/element.spec.get",
+            params={"category": category, "type": element_type},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    # ── Resources (inventory items: tools, LLMs, providers, …) ─
+
+    async def create_resource(
+        self,
+        category: str,
+        element_type: str,
+        name: str,
+        config: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Create a new resource in the user's library."""
+        resp = await self._http.post(
+            "/resources/resource.save",
+            json={
+                "category": category,
+                "type": element_type,
+                "name": name,
+                "config": config,
+            },
+            params={"userId": user_id, "identityType": "user"},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def list_resources(
+        self,
+        user_id: str,
+        category: str | None = None,
+        element_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List resources in the user's library with optional filtering."""
+        params: dict[str, Any] = {
+            "userId": user_id,
+            "identityType": "user",
+            "limit": limit,
+            "offset": offset,
+        }
+        if category:
+            params["category"] = category
+        if element_type:
+            params["type"] = element_type
+        resp = await self._http.get("/resources/resources.list", params=params)
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def get_resource(self, resource_id: str) -> dict[str, Any]:
+        """Get a single resource by ID."""
+        resp = await self._http.get(
+            "/resources/resource.get",
+            params={"resourceId": resource_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def update_resource(
+        self,
+        resource_id: str,
+        config: dict[str, Any],
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing resource's config and/or name."""
+        body: dict[str, Any] = {"resourceId": resource_id, "config": config}
+        if name is not None:
+            body["name"] = name
+        resp = await self._http.put("/resources/resource.update", json=body)
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def delete_resource(self, resource_id: str) -> dict[str, Any]:
+        """Delete a resource from the user's library."""
+        resp = await self._http.delete(
+            "/resources/resource.delete",
+            params={"resourceId": resource_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def validate_resource_config(
+        self,
+        category: str,
+        element_type: str,
+        config: dict[str, Any],
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate a resource config before saving."""
+        body: dict[str, Any] = {
+            "category": category,
+            "type": element_type,
+            "config": config,
+        }
+        if name:
+            body["name"] = name
+        resp = await self._http.post("/resources/config.validate", json=body)
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    # ── Blueprint management (create / update / delete) ────────
+
+    async def save_blueprint(
+        self,
+        draft_dict: dict[str, Any],
+        user_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Save a new blueprint draft."""
+        import json as _json
+        body: dict[str, Any] = {
+            "blueprintRaw": _json.dumps(draft_dict),
+        }
+        if metadata:
+            body["metadata"] = metadata
+        resp = await self._http.post(
+            "/blueprints/blueprint.save",
+            json=body,
+            params={"userId": user_id, "identityType": "user"},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def update_blueprint(
+        self,
+        blueprint_id: str,
+        draft_dict: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Update an existing blueprint in-place."""
+        import json as _json
+        resp = await self._http.put(
+            "/blueprints/blueprint.update",
+            json={
+                "blueprintId": blueprint_id,
+                "blueprintRaw": _json.dumps(draft_dict),
+            },
+            params={"userId": user_id, "identityType": "user"},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def get_blueprint_info(self, blueprint_id: str) -> dict[str, Any]:
+        """Get blueprint details by ID."""
+        resp = await self._http.get(
+            "/blueprints/blueprint.info.get",
+            params={"blueprintId": blueprint_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def delete_blueprint(self, blueprint_id: str) -> dict[str, Any]:
+        """Delete a blueprint by ID."""
+        resp = await self._http.delete(
+            "/blueprints/remove.blueprint",
+            params={"blueprintId": blueprint_id},
+        )
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def get_blueprint_draft_schema(self) -> dict[str, Any]:
+        """Get the JSON schema for blueprint drafts."""
+        resp = await self._http.get("/blueprints/blueprint.draft.schema.get")
+        resp.raise_for_status()
+        return self._parse_json(resp)
+
+    async def validate_blueprint_draft(
+        self,
+        draft_dict: dict[str, Any],
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Validate a blueprint draft without saving it."""
+        import json as _json
+        resp = await self._http.post(
+            "/blueprints/draft.validate",
+            json={
+                "draft": _json.dumps(draft_dict),
+                "timeoutSeconds": timeout_seconds,
+            },
+        )
+        if resp.status_code >= 400:
+            body = resp.text
+            raise RuntimeError(
+                f"Validation API returned {resp.status_code}: {body}"
+            )
         return self._parse_json(resp)
 
     # ── Helpers ─────────────────────────────────────────────────
