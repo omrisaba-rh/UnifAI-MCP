@@ -5,7 +5,7 @@ description = "MCP server for UnifAI multi-agent workflows with Red Hat SSO auth
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
-    "mcp[server]>=1.28.0",
+    "mcp[server]>=1.28.0,<2",
     "httpx>=0.28.0",
     "pydantic-settings>=2.9.0",
 ]
