@@ -1,0 +1,36 @@
+1. Get the application URL by running these commands:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if .Values.route.enabled }}
+  Run: oc get route {{ include "unifai-mcp.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}'
+  Your MCP endpoint will be: https://<route-host>/mcp
+{{- else if contains "ClusterIP" .Values.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "unifai-mcp.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:13456 to use your application"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 13456:$CONTAINER_PORT
+{{- end }}
+
+2. Check the health of your UnifAI MCP Server:
+  kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "unifai-mcp.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+  # View application logs
+  kubectl logs --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "unifai-mcp.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+3. Health check endpoint:
+  curl https://<route-host>/health
+
+4. MCP endpoint:
+  curl -X POST https://<route-host>/mcp \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+
+5. Authentication:
+  The server uses Red Hat SSO via the UnifAI Identity Service.
+  Users authenticate through the OAuth flow when connecting with an MCP client.
+
+For more information about unifai-mcp, visit the project repository.

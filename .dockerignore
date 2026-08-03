@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist
+build
+.git
+.env
+.cursor
+certs
+*.md
+.dockerignore
+Dockerfile
+helm

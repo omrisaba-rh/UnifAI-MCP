@@ -1,0 +1,19 @@
+apiVersion: v2
+name: unifai-mcp
+description: A Helm chart for UnifAI MCP Server - Multi-agent workflow orchestration over MCP
+type: application
+version: 0.1.0
+appVersion: "latest"
+keywords:
+  - mcp
+  - unifai
+  - multi-agent
+  - ai
+  - llm
+  - workflow-orchestration
+home: https://github.com/yhabushi/UnifAI-MCP
+sources:
+  - https://github.com/yhabushi/UnifAI-MCP
+maintainers:
+  - name: UnifAI Team
+    email: unifai@redhat.com

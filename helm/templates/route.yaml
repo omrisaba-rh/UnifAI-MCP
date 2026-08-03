@@ -1,0 +1,29 @@
+{{- if .Values.route.enabled }}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ include "unifai-mcp.fullname" . }}
+  labels:
+    {{- include "unifai-mcp.labels" . | nindent 4 }}
+    paas.redhat.com/appcode: TAG-001
+  {{- with .Values.route.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.route.host }}
+  host: {{ .Values.route.host }}
+  {{- else if (index .Values.env "MCP_SERVER_URL") }}
+  host: {{ index .Values.env "MCP_SERVER_URL" | trimPrefix "https://" | trimPrefix "http://" }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ include "unifai-mcp.fullname" . }}
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: {{ .Values.route.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.route.insecureEdgeTerminationPolicy }}
+  wildcardPolicy: None
+{{- end }}
