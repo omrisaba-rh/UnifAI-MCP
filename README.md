@@ -35,7 +35,7 @@ This server is **MCP-first and client-agnostic**. It must work the same way no m
 
 | Tool | Description |
 |------|-------------|
-| `authenticate` | Check auth status, display profile & recent sessions, and silently load available workflows into context |
+| `get_startup_context` | Load display name, teams, recent sessions, and silently load available workflows into context (call first each conversation) |
 | `get_guide` | Interactive guidance on any topic: `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts` |
 
 ### Workflow Execution
@@ -73,7 +73,7 @@ This server is **MCP-first and client-agnostic**. It must work the same way no m
 
 ## How Workflow Routing Works
 
-Routing is entirely MCP-driven (no host-specific rules required). When `authenticate` is called at conversation start, the server fetches both recent sessions and available workflows concurrently. The workflow list is returned with curated routing hints (defined in `WORKFLOW_HINTS`) that tell the client LLM **when** to use each workflow:
+Routing is entirely MCP-driven (no host-specific rules required). When `get_startup_context` is called at conversation start, the server fetches both recent sessions and available workflows concurrently. The workflow list is returned with curated routing hints (defined in `WORKFLOW_HINTS`) that tell the client LLM **when** to use each workflow:
 
 ```
 • AskRH — Red Hat product knowledge (RHEL, OpenShift, Ansible, security, lifecycle)

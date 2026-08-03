@@ -172,7 +172,7 @@ Verified against `src/unifai_mcp/server.py` and `README.md`.
 
 | Category | Tools |
 |----------|-------|
-| **Discovery & guidance** | `authenticate`, `get_guide` |
+| **Discovery & guidance** | `get_startup_context`, `get_guide` |
 | **Workflow execution** | `list_workflows`, `run_workflow`, `get_session_chat`, `list_sessions`, `list_recent_5_sessions` |
 | **Resource management** | `list_resources`, `get_resource_details`, `create_resource`, `update_resource`, `delete_resource`, `list_catalog`, `get_element_schema` |
 | **Workflow management** | `get_workflow_details`, `get_workflow_schema`, `create_workflow`, `update_workflow`, `validate_workflow`, `delete_workflow` |
@@ -185,7 +185,7 @@ Verified against `src/unifai_mcp/server.py` and `README.md`.
 | **Auth flow** | MCP client → local OAuth AS → UnifAI Identity Service → Keycloak SSO → session cookie stored server-side |
 | **Client interaction model** | Client LLM chooses tools; high-value action is usually one `run_workflow` call |
 | **Backend coupling** | Thin MCP adapter over UnifAI MAS REST API (`/api2`) |
-| **Intelligent routing** | `WORKFLOW_HINTS` + silent workflow list on `authenticate` guides the client LLM |
+| **Intelligent routing** | `WORKFLOW_HINTS` + silent workflow list on `get_startup_context` guides the client LLM |
 | **Caching** | Blueprint list (5 min TTL), session ownership set (5 min TTL) |
 | **Execution model** | Synchronous poll up to 5 minutes; returns final workflow output as string |
 
