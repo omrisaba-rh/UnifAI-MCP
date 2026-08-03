@@ -7,7 +7,7 @@ The UnifAI MCP server exposes the UnifAI multi-agent workflow orchestration plat
 ## Tool Categories
 
 ### Discovery & Guidance (2 tools)
-- `authenticate` — SSO login, session/workflow discovery
+- `get_startup_context` — display name, teams, session/workflow discovery (call first each conversation)
 - `get_guide` — interactive guides: quick_start, workflow_patterns, llm_selection, resource_types, build_agent, build_workflow, system_prompts
 
 ### Workflow Execution (5 tools)

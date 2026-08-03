@@ -12,6 +12,7 @@ Auth:      Local AS with Identity Service login proxy + in-memory DCR
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -115,8 +116,8 @@ async def lifespan(_server: FastMCP) -> AsyncIterator[dict]:
 
 _INSTRUCTIONS = """\
 MCP server for UnifAI — a multi-agent workflow orchestration platform.
-Authenticate with your Red Hat SSO credentials, then run AI workflows
-by workflow name or ID.
+Once the MCP client has a valid session, run AI workflows by workflow
+name or ID.
 
 ═══ CLIENT-AGNOSTIC ═══
 This MCP server is host-agnostic (Cursor, Claude Desktop, Claude Code,
@@ -125,13 +126,20 @@ hints, UX rules, and guides — come from this server. Do not rely on
 host-specific rules or config for UnifAI behavior.
 
 ═══ STARTUP ═══
-Always call 'authenticate' FIRST at the start of every conversation.
-Present only the recent sessions to the user and ask if they'd like to
-continue or start something new. Do NOT list the available workflows —
-use them silently when deciding which workflow to invoke via run_workflow.
-When the user asks to run a team workflow (e.g. "UIE Agent"), pass
-team="<team name>" to both list_workflows and run_workflow so the
-session is created under that team workspace — not personal.
+Always call 'get_startup_context' FIRST at the start of every conversation.
+This loads the user's display name, teams, recent sessions, and workflow
+routing context for greeting and scope selection.
+Present the user by name when available. Present only the recent sessions
+to the user and ask if they'd like to continue or start something new.
+Do NOT list the available workflows — use them silently when deciding
+which workflow to invoke via run_workflow.
+If get_startup_context reports that the user belongs to one or more teams,
+present those team names and ask whether future actions in this
+conversation should use (A) Personal workspace or (B) a Team workspace.
+If they pick a team, remember that choice for the rest of the conversation
+and pass team="<team name>" to list_workflows and run_workflow unless they
+ask to switch. If they have no teams, do not ask about scope — stay on
+personal. If the user later names a different team, switch to that team.
 
 ═══ USER EXPERIENCE GUIDELINES ═══
 You are a helpful UnifAI assistant. Follow these rules to provide
@@ -156,6 +164,17 @@ the best experience:
 
 5. VALIDATE BEFORE SAVING: Use validate_workflow before create_workflow
    to catch errors early and give the user a chance to fix them.
+
+8. PRE-RUN VALIDATION: run_workflow automatically validates the
+   workflow before execution. If validation fails (e.g. some agents
+   or MCP servers are not authenticated), the tool returns a report
+   listing which agents are available and which are not. Present
+   this clearly to the user and ask them to choose:
+     (A) Run anyway — partial results from working agents, or
+     (B) Cancel — fix the workflow / authenticate first.
+   If the user chooses (A), call run_workflow again with
+   skip_validation=True. Never set skip_validation=True without
+   the user's explicit consent.
 
 6. SHOW WHAT YOU BUILT: After creating resources or workflows, use
    get_resource_details or get_workflow_details to show the user
@@ -338,44 +357,75 @@ async def _resolve_team(
 
 
 @mcp.tool()
-async def authenticate(ctx: Context) -> str:
-    """Check authentication status, return user profile and recent sessions.
+async def get_startup_context(ctx: Context) -> str:
+    """Load UnifAI startup context: display name, teams, recent sessions, routing.
 
-    Call this tool at the start of every conversation. It returns the user's
-    identity, their most recent UnifAI workflow sessions so you can offer to
-    continue where they left off, and the available workflows for internal
-    routing context.
+    Call this at the start of every conversation. Returns the user's display
+    name (greet them by name), teams (for Personal vs Team scope), recent
+    workflow sessions, and available workflows for internal routing.
     """
     access = get_access_token()
     if access is None or not access.subject:
         return (
-            "Not authenticated.\n"
-            "Your MCP client should automatically start the OAuth login flow. "
-            "If prompted, log in with your Red Hat SSO credentials."
+            "No active UnifAI session.\n"
+            "Complete the MCP client's sign-in flow if prompted, then call "
+            "get_startup_context again."
         )
 
     claims = access.claims or {}
     session_cookie = auth_provider.get_session_cookie(access.token) or ""
     username = claims.get("preferred_username", access.subject)
+    display_name = claims.get("name") or username
 
     parts = [
-        "Authenticated successfully.",
+        "Startup context loaded.",
         f"  Username : {username}",
-        f"  Name     : {claims.get('name', 'n/a')}",
+        f"  Name     : {display_name}",
         f"  Email    : {claims.get('email', 'n/a')}",
         f"  Subject  : {access.subject}",
+        "",
+        f"Greet the user by name ({display_name}).",
     ]
 
     if session_cookie:
         unifai = _get_unifai(ctx)
         unifai.set_session_cookie(session_cookie)
 
-        # Fetch sessions and blueprints concurrently
-        sessions_result, blueprints_result = await asyncio.gather(
+        # Fetch teams, sessions, and blueprints concurrently
+        teams_result, sessions_result, blueprints_result = await asyncio.gather(
+            unifai.list_teams(username),
             unifai.list_user_sessions(user_key=username),
             unifai.list_blueprints(username),
             return_exceptions=True,
         )
+
+        # ── Teams / workspace scope (displayed to user when present) ──
+        if isinstance(teams_result, Exception):
+            logger.debug("Could not fetch teams: %s", teams_result)
+        else:
+            teams = teams_result or []
+            if teams:
+                parts.append("")
+                parts.append(f"Teams ({len(teams)}):")
+                for t in teams:
+                    name = t.get("name") or t.get("team_id") or t.get("id") or "?"
+                    tid = t.get("team_id") or t.get("id") or ""
+                    line = f"  - {name}"
+                    if tid and tid != name:
+                        line += f"  [id: {tid}]"
+                    parts.append(line)
+                parts.append("")
+                parts.append(
+                    "Ask the user whether future actions in this conversation "
+                    "should use (A) Personal workspace or (B) a Team workspace "
+                    "(list the team names above as options). "
+                    "If they pick a team, remember that choice and pass "
+                    'team="<team name>" to list_workflows and run_workflow '
+                    "for the rest of this conversation unless they ask to "
+                    "switch. Do not ask about scope if they later say they "
+                    "have no preference — default to Personal."
+                )
+            # No teams → stay silent about scope (personal only).
 
         # ── Recent sessions (displayed to user) ──
         if isinstance(sessions_result, Exception):
@@ -1273,8 +1323,16 @@ async def run_workflow(
     workflow: str,
     prompt: str,
     team: str | None = None,
+    skip_validation: bool = False,
 ) -> str:
     """Run a UnifAI multi-agent workflow.
+
+    Before execution the workflow is validated to check that all
+    agents and resources are reachable.  If validation fails but
+    some agents still work, the tool returns a detailed report and
+    asks the user to decide whether to proceed or fix issues first.
+    Set ``skip_validation=True`` to bypass validation (e.g. after
+    the user has acknowledged the issues and wants to run anyway).
 
     Args:
         workflow: Workflow name (e.g. "Multi-Source Knowledge Search")
@@ -1284,6 +1342,9 @@ async def run_workflow(
                   When set, resolves the workflow from the team workspace and
                   creates the session under that team (visible in team UI).
                   When omitted, runs under the user's personal workspace.
+        skip_validation: Skip pre-run validation. Defaults to False.
+                  Set to True only after the user has reviewed and
+                  acknowledged validation issues.
     """
     session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
@@ -1312,6 +1373,48 @@ async def run_workflow(
         display_name=display_name,
     )
 
+    # ── Pre-run validation ──────────────────────────────────────
+    if not skip_validation:
+        await ctx.info("Validating workflow before execution...")
+        vr = await _validate_workflow_pre_run(
+            unifai, blueprint_id, user_id=owner_id,
+        )
+
+        if vr is not None and not vr.is_valid:
+            lines = [
+                f"⚠ Workflow validation: {vr.summary}",
+                f"  Workflow: {workflow} ({blueprint_id})",
+            ]
+
+            if vr.failed:
+                lines.append("\n  Unavailable agents / resources:")
+                for label, reason in vr.failed:
+                    lines.append(f"    ✗ {label}")
+                    lines.append(f"      Reason: {reason}")
+
+            if vr.passed:
+                lines.append("\n  Available agents / resources:")
+                for label in vr.passed:
+                    lines.append(f"    ✓ {label}")
+
+            lines.append(
+                "\n─────────────────────────────────────────────"
+                "\nSome agents in this workflow are unavailable. "
+                "The workflow may still produce partial results "
+                "from the working agents listed above."
+                "\n\nPlease ask the user to choose:"
+                "\n  (A) Run anyway — execute the workflow with "
+                "the available agents (partial results)."
+                "\n  (B) Cancel — do not run. The user should fix "
+                "the workflow or authenticate the failing "
+                "agents/MCP servers first."
+                "\n\nIf the user chooses (A), call run_workflow again "
+                "with skip_validation=True."
+            )
+
+            return "\n".join(lines)
+
+    # ── Execute workflow ────────────────────────────────────────
     try:
         await ctx.info(
             f"Creating session for workflow {blueprint_id} ({scope_label})..."
@@ -1477,11 +1580,45 @@ async def list_recent_5_sessions(ctx: Context) -> str:
     """Fetch the 5 most recent UnifAI workflow sessions.
 
     A quick-access tool that returns the last 5 sessions with their IDs,
-    titles, and timestamps. Use get_session_chat to retrieve full details.
+    titles, and timestamps. Also includes the user's display name and
+    teams when available (fallback if get_startup_context was not called).
+    Use get_session_chat to retrieve full details.
     """
     session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
     unifai.set_session_cookie(session_cookie)
+
+    access = get_access_token()
+    claims = (access.claims if access else None) or {}
+    display_name = claims.get("name") or username
+
+    lines = [
+        f"User: {display_name} ({username})",
+    ]
+
+    try:
+        teams = await unifai.list_teams(username)
+    except Exception:
+        logger.debug("Could not fetch teams for list_recent_5_sessions", exc_info=True)
+        teams = None
+
+    if teams:
+        lines.append(f"Teams ({len(teams)}):")
+        for t in teams:
+            name = t.get("name") or t.get("team_id") or t.get("id") or "?"
+            tid = t.get("team_id") or t.get("id") or ""
+            line = f"  - {name}"
+            if tid and tid != name:
+                line += f"  [id: {tid}]"
+            lines.append(line)
+        lines.append(
+            "Ask the user whether future actions in this conversation "
+            "should use (A) Personal workspace or (B) a Team workspace "
+            "(list the team names above as options). "
+            "If they pick a team, remember that choice and pass "
+            'team="<team name>" to list_workflows and run_workflow.'
+        )
+    lines.append("")
 
     try:
         sessions = await unifai.list_user_sessions(user_key=username)
@@ -1490,12 +1627,13 @@ async def list_recent_5_sessions(ctx: Context) -> str:
         return "Failed to list sessions. Please try again later."
 
     if not sessions:
-        return "No sessions found."
+        lines.append("No sessions found.")
+        return "\n".join(lines)
 
     sessions.sort(key=lambda s: s.get("started_at") or "", reverse=True)
     recent = sessions[:5]
 
-    lines = [f"Last {len(recent)} sessions:\n"]
+    lines.append(f"Last {len(recent)} sessions:\n")
     for s in recent:
         metadata = s.get("metadata", {}) or {}
         sid = s.get("session_id") or s.get("sessionId") or "?"
@@ -1527,8 +1665,9 @@ async def get_session_chat(
     """Retrieve the chat history and output of a previous UnifAI workflow session.
 
     Args:
-        session_id: The session ID to retrieve (from the authenticate tool's
-                    recent sessions list, or from a previous run_workflow result).
+        session_id: The session ID to retrieve (from the get_startup_context
+                    tool's recent sessions list, or from a previous
+                    run_workflow result).
     """
     session_cookie, username = _require_auth()
     unifai = _get_unifai(ctx)
@@ -2271,6 +2410,77 @@ async def get_workflow_details(
             lines.append(line)
 
     return "\n".join(lines)
+
+
+@dataclasses.dataclass
+class _PreRunValidation:
+    """Result of pre-run workflow validation."""
+    is_valid: bool
+    passed: list[str]
+    failed: list[tuple[str, str]]  # (label, reason)
+    summary: str
+
+
+async def _validate_workflow_pre_run(
+    unifai: "UnifAIClient",
+    blueprint_id: str,
+    user_id: str,
+) -> _PreRunValidation | None:
+    """Validate a saved workflow before running it.
+
+    Uses the same ``/blueprints/blueprint.validate`` endpoint as the
+    UnifAI UI so OAuth MCP credentials resolve via the authenticated
+    session.  Returns ``None`` when validation cannot be performed
+    (e.g. network error).
+    """
+    try:
+        result = await unifai.validate_blueprint(
+            blueprint_id,
+            user_id=user_id,
+            timeout_seconds=30.0,
+        )
+    except Exception:
+        logger.warning(
+            "Pre-run validation: validation call failed for %s",
+            blueprint_id,
+        )
+        return None
+
+    is_valid = result.get("is_valid", False)
+    element_results = result.get("element_results", {})
+
+    passed: list[str] = []
+    failed: list[tuple[str, str]] = []
+
+    for rid, er in element_results.items():
+        name = er.get("name") or rid
+        el_type = er.get("element_type", "")
+        label = f"{name} ({el_type})" if el_type else name
+
+        if er.get("is_valid"):
+            passed.append(label)
+        else:
+            msgs = er.get("messages", [])
+            reason = "unknown error"
+            if msgs:
+                first = msgs[0]
+                reason = first.get("message", "") if isinstance(first, dict) else str(first)
+            failed.append((label, reason))
+
+    if is_valid:
+        summary = f"VALID — all {len(passed)} resources passed"
+    else:
+        summary = (
+            f"INVALID — {len(failed)} resource(s) failed, "
+            f"{len(passed)} resource(s) passed"
+        )
+
+    return _PreRunValidation(
+        is_valid=is_valid,
+        passed=passed,
+        failed=failed,
+        summary=summary,
+    )
 
 
 async def _resolve_blueprint(

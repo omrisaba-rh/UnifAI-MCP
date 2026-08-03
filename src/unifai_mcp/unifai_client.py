@@ -537,12 +537,44 @@ class UnifAIClient:
         resp.raise_for_status()
         return self._parse_json(resp)
 
+    async def validate_blueprint(
+        self,
+        blueprint_id: str,
+        user_id: str,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, Any]:
+        """Validate a saved blueprint (same path as the UnifAI UI).
+
+        Uses ``/blueprints/blueprint.validate``, which resolves OAuth MCP
+        credentials via the authenticated session. Prefer this for
+        pre-run checks on existing workflows.
+        """
+        resp = await self._http.post(
+            "/blueprints/blueprint.validate",
+            json={
+                "blueprintId": blueprint_id,
+                "userId": user_id,
+                "timeoutSeconds": timeout_seconds,
+            },
+        )
+        if resp.status_code >= 400:
+            body = resp.text
+            raise RuntimeError(
+                f"Validation API returned {resp.status_code}: {body}"
+            )
+        return self._parse_json(resp)
+
     async def validate_blueprint_draft(
         self,
         draft_dict: dict[str, Any],
         timeout_seconds: float = 30.0,
     ) -> dict[str, Any]:
-        """Validate a blueprint draft without saving it."""
+        """Validate a blueprint draft without saving it.
+
+        Note: ``/blueprints/draft.validate`` does not receive credential
+        user context, so OAuth-based MCP providers may falsely fail.
+        Use :meth:`validate_blueprint` for saved workflows.
+        """
         import json as _json
         resp = await self._http.post(
             "/blueprints/draft.validate",

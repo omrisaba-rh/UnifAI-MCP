@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Pre-run workflow validation** now calls `/blueprints/blueprint.validate` (same as the UnifAI UI) instead of rehydrating the workflow and posting to `/blueprints/draft.validate`. Draft validation has no authenticated credential context, which caused false INVALID results for OAuth MCP providers (e.g. "cancel scope" / connection failures) even when those providers were valid in the UI.
+- **Startup tool visibility**: renamed `authenticate` → `get_user_context` → `get_startup_context` so clients that inject an OAuth helper (e.g. Cursor `mcp_auth`) do not hide or replace the UnifAI entrypoint that loads the display name, teams, and recent sessions. Cursor was still stripping `get_user_context` after OAuth reconnect; name/teams wording was scrubbed from the tool description and server instructions opener.
+- **`list_recent_5_sessions` fallback**: also returns display name and teams so greeting/scope still work if the startup tool is unavailable to the client.
+
 ### Added
+- **Post-auth workspace scope prompt**: `get_startup_context` lists the user's teams (when any) and instructs the client to ask Personal vs Team before continuing; server startup instructions remember that choice and pass `team=` to `list_workflows` / `run_workflow`. Users with no teams are not asked.
 - **Team workspace support**: Optional `team` parameter on `list_workflows` and `run_workflow` resolves team name/ID via the Identity Service, lists team workflows, and creates sessions under the team workspace (visible in the team UI)
 - **Native HTTPS**: Uvicorn TLS termination when `SSL_CERTFILE` and `SSL_KEYFILE` are set
 - **`get_guide` tool**: Interactive guidance system with 7 topics — `quick_start`, `workflow_patterns`, `llm_selection`, `resource_types`, `build_agent`, `build_workflow`, `system_prompts`
@@ -22,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full UnifAI REST API client coverage: catalog, resources, blueprints, sessions
 
 ### Changed
+- **`authenticate` → `get_user_context` → `get_startup_context`**: same behavior (display name from token claims, teams, sessions, workflow routing hints); server instructions and docs updated to call the new name. Display name still comes from the SSO token claims via this tool — not from Cursor's `mcp_auth`.
 - **Renamed all "blueprint" tools to "workflow"** for consistency (e.g. `create_blueprint` → `create_workflow`, `get_blueprint_details` → `get_workflow_details`)
 - All user-facing output now uses "workflow" terminology instead of "blueprint"
 - Server instructions completely rewritten with UX guidelines, key concepts, and workflow pattern reference
